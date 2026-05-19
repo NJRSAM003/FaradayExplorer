@@ -1,0 +1,35 @@
+# Large data files — do not commit
+*.fits
+*.FITS
+*.ms
+*.uvfits
+
+# Output files
+*.png
+*.pdf
+*.log
+model_diagnostics.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Qt settings cache
+*.ini
