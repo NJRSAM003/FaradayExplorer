@@ -4,7 +4,7 @@
 *.ms
 *.uvfits
 
-# Video files — splash.mp4 is intentionally kept (it's the app logo)
+# Video files — splash videos are intentionally kept (app branding)
 *.mp4
 !splash.mp4
 !splash_app.mp4
@@ -13,6 +13,7 @@
 # Output files
 *.png
 !splash_frame.png
+!FEIcon.png
 *.pdf
 *.log
 

@@ -4,8 +4,9 @@
 #
 # What it does:
 #   1. Creates (or updates) the conda environment from environment.yml
-#   2. Installs a .desktop launcher so the app appears in your app menu
-#   3. Makes the launcher script executable
+#   2. Installs the app icon to ~/.local/share/icons/
+#   3. Installs a .desktop launcher so the app appears in your app menu
+#   4. Makes the launcher script executable
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,16 +43,25 @@ else
     conda env create -n "$ENV_NAME" -f "$SCRIPT_DIR/environment.yml"
 fi
 
-# ── 2. Write .desktop file with correct absolute paths ───────────────────────
-echo "[2/3] Installing desktop entry..."
+# ── 2. Install app icon ───────────────────────────────────────────────────────
+echo "[2/4] Installing app icon..."
+ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
+mkdir -p "$ICON_DIR"
+cp "$SCRIPT_DIR/FEIcon.png" "$ICON_DIR/faraday_explorer.png"
+gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
+# ── 3. Write .desktop file with correct absolute paths ───────────────────────
+echo "[3/4] Installing desktop entry..."
 DESKTOP_DIR="$HOME/.local/share/applications"
 mkdir -p "$DESKTOP_DIR"
 
 sed "s|Exec=.*|Exec=${SCRIPT_DIR}/launch_faraday_explorer.sh ${ENV_NAME}|g" \
     "$SCRIPT_DIR/faraday_explorer.desktop" > "$DESKTOP_DIR/faraday_explorer.desktop"
 
-# ── 3. Permissions ───────────────────────────────────────────────────────────
-echo "[3/3] Setting permissions..."
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+
+# ── 4. Permissions ───────────────────────────────────────────────────────────
+echo "[4/4] Setting permissions..."
 chmod +x "$SCRIPT_DIR/launch_faraday_explorer.sh"
 
 echo ""
