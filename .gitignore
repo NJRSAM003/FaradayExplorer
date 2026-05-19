@@ -14,6 +14,7 @@
 *.png
 !splash_frame.png
 !FEIcon.png
+FEIcon_old.png
 *.pdf
 *.log
 
