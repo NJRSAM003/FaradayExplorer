@@ -4,11 +4,16 @@
 *.ms
 *.uvfits
 
+# Video files — splash.mp4 is intentionally kept (it's the app logo)
+*.mp4
+!splash.mp4
+*.webm
+
 # Output files
 *.png
+!splash_frame.png
 *.pdf
 *.log
-model_diagnostics.png
 
 # Python
 __pycache__/

@@ -1,0 +1,13 @@
+name: qu_viewer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - numpy
+  - scipy
+  - matplotlib
+  - astropy
+  - pyqt>=5.12
+  - ffmpeg
+  - pip

@@ -6,7 +6,7 @@ PyQt5 application: native controls, embedded matplotlib canvases.
 Run:  conda run -n narnia python3 qu_viewer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
 """
 
-import os, sys
+import os, sys, json, subprocess
 import numpy as np
 from scipy.signal import find_peaks
 import matplotlib
@@ -25,22 +25,16 @@ from PyQt5.QtWidgets import (
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QUrl, QEventLoop
-from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QSplashScreen
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
+from PyQt5.QtGui import QFont, QPixmap, QImage
 
-try:
-    from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-    from PyQt5.QtMultimediaWidgets import QVideoWidget
-    HAS_MULTIMEDIA = True
-except ImportError:
-    HAS_MULTIMEDIA = False
-
-# Path to the opening splash video (skipped silently if file absent or
-# multimedia unavailable)
-SPLASH_VIDEO = os.path.join(
-    os.path.expanduser("~"), "Videos", "Screencasts", "QU_viewer_opening_logo.mp4"
-)
-SPLASH_EXTRA_MS = 2000   # milliseconds to hold the last frame after video ends
+# Splash video (MP4) played frame-by-frame via ffmpeg pipe — no GStreamer needed.
+# Falls back to the static PNG if the video is absent or unreadable.
+SPLASH_VIDEO   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash.mp4")
+SPLASH_IMAGE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash_frame.png")
+SPLASH_WIDTH   = 500          # display width in pixels (height scaled proportionally)
+SPLASH_EXTRA_MS = 2000        # milliseconds to hold the last frame after video ends
 
 
 # ── Physical constants ────────────────────────────────────────────────────────
@@ -457,67 +451,128 @@ class MapCanvas(FigureCanvas):
             self._centre = None
 
 
-# ── Opening splash video ─────────────────────────────────────────────────────
+# ── Opening splash ────────────────────────────────────────────────────────────
 
-class VideoSplash(QWidget):
-    """Frameless window that plays the opening logo video.
-    Emits `finished` when the video ends + SPLASH_EXTRA_MS have elapsed."""
+class VideoSplash(QSplashScreen):
+    """Plays the splash video frame-by-frame via an ffmpeg pipe + QTimer.
+
+    No GStreamer / QtMultimedia dependency.  Fades in over ~0.4 s, plays every
+    frame at the correct fps, holds the last frame for SPLASH_EXTRA_MS, then
+    emits `finished`.  Falls back to a static PNG if the video cannot be read.
+    """
 
     finished = pyqtSignal()
 
     def __init__(self):
-        super().__init__()
-        self.setWindowFlags(
-            Qt.FramelessWindowHint |
-            Qt.WindowStaysOnTopHint |
-            Qt.SplashScreen
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.setStyleSheet("background: black;")
+        self._frames = []
+        self._fps    = 25.0
+        self._idx    = 0
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        pixmap = QPixmap()
 
-        self._video_widget = QVideoWidget()
-        self._video_widget.setStyleSheet("background: black;")
-        layout.addWidget(self._video_widget)
+        # Try to decode the video with ffmpeg
+        if os.path.exists(SPLASH_VIDEO):
+            try:
+                info = self._probe(SPLASH_VIDEO)
+                if info:
+                    src_w, src_h, fps = info
+                    self._fps    = fps
+                    self._frames = self._pipe_frames(SPLASH_VIDEO, src_w, src_h)
+                    if self._frames:
+                        pixmap = self._frames[0]
+            except Exception:
+                pass
 
-        self._player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        self._player.setVideoOutput(self._video_widget)
-        self._player.setMedia(
-            QMediaContent(QUrl.fromLocalFile(os.path.abspath(SPLASH_VIDEO)))
-        )
+        # Static PNG fallback
+        if pixmap.isNull() and os.path.exists(SPLASH_IMAGE):
+            pixmap = QPixmap(SPLASH_IMAGE)
 
-        self._hold_timer = QTimer(singleShot=True)
+        super().__init__(pixmap, Qt.WindowStaysOnTopHint)
+        self.setWindowOpacity(0.0)
+
+        interval = max(16, int(1000.0 / self._fps))
+        self._frame_timer = QTimer(self, interval=interval)
+        self._frame_timer.timeout.connect(self._next_frame)
+
+        self._hold_timer = QTimer(self, singleShot=True)
         self._hold_timer.timeout.connect(self.finished)
 
-        # Fire hold timer once the video reaches its end
-        self._player.mediaStatusChanged.connect(self._on_status)
-        # Safety fallback: if something goes wrong, close after 12 s
-        self._fallback = QTimer(singleShot=True)
-        self._fallback.timeout.connect(self.finished)
-        self._fallback.start(12_000)
+        self._fade_steps = 0   # counts fade-in ticks
 
-        # Centre on primary screen at 800 × 450 (16:9 default)
-        self.resize(800, 450)
-        screen = QApplication.primaryScreen().availableGeometry()
-        self.move(
-            screen.x() + (screen.width()  - self.width())  // 2,
-            screen.y() + (screen.height() - self.height()) // 2,
-        )
-
+    # ── public ────────────────────────────────────────────────────────────────
     def start(self):
         self.show()
-        self._player.play()
+        QApplication.processEvents()
+        self._fade_steps = 0
+        self._tick_fade()
 
-    def _on_status(self, status):
-        if status == QMediaPlayer.EndOfMedia:
-            self._fallback.stop()
+    # ── fade-in (20 steps × 16 ms ≈ 0.32 s) ─────────────────────────────────
+    def _tick_fade(self):
+        self._fade_steps += 1
+        opacity = min(1.0, self._fade_steps / 20.0)
+        self.setWindowOpacity(opacity)
+        QApplication.processEvents()
+        if opacity < 1.0:
+            QTimer.singleShot(16, self._tick_fade)
+        else:
+            if self._frames:
+                self._frame_timer.start()
+            else:
+                self._hold_timer.start(4000)   # static image: hold 4 s
+
+    # ── frame playback ────────────────────────────────────────────────────────
+    def _next_frame(self):
+        self._idx += 1
+        if self._idx >= len(self._frames):
+            self._frame_timer.stop()
             self._hold_timer.start(SPLASH_EXTRA_MS)
+            return
+        self.setPixmap(self._frames[self._idx])
+        self.repaint()
 
-    def closeEvent(self, event):
-        self._player.stop()
-        super().closeEvent(event)
+    # ── ffmpeg helpers ────────────────────────────────────────────────────────
+    @staticmethod
+    def _probe(path):
+        """Return (width, height, fps) for the first video stream via ffprobe."""
+        raw = subprocess.check_output(
+            ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+             '-show_streams', path],
+            stderr=subprocess.DEVNULL
+        )
+        for s in json.loads(raw).get('streams', []):
+            if s.get('codec_type') == 'video':
+                w, h = s['width'], s['height']
+                num, den = s.get('r_frame_rate', '25/1').split('/')
+                return w, h, float(num) / float(den)
+        return None
+
+    @staticmethod
+    def _pipe_frames(path, src_w, src_h):
+        """Decode all frames via ffmpeg stdout pipe; return list of QPixmap."""
+        dst_w = SPLASH_WIDTH
+        dst_h = int(src_h * dst_w / src_w)
+        if dst_h % 2:
+            dst_h += 1
+
+        proc = subprocess.Popen(
+            ['ffmpeg', '-i', path,
+             '-vf', f'scale={dst_w}:{dst_h}',
+             '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
+        frame_bytes = dst_w * dst_h * 3
+        frames = []
+        while True:
+            raw = proc.stdout.read(frame_bytes)
+            if len(raw) < frame_bytes:
+                break
+            arr = np.frombuffer(raw, dtype=np.uint8).reshape((dst_h, dst_w, 3))
+            img = QImage(arr.tobytes(), dst_w, dst_h,
+                         dst_w * 3, QImage.Format_RGB888)
+            frames.append(QPixmap.fromImage(img))
+        proc.stdout.close()
+        proc.wait()
+        return frames
 
 
 # ── Startup file-picker dialog ────────────────────────────────────────────────
@@ -1024,15 +1079,14 @@ def main():
     app.setOrganizationName("QUViewer")
     app.setStyle("Fusion")
 
-    # ── Opening splash video ──────────────────────────────────────────────────
-    if HAS_MULTIMEDIA and os.path.exists(SPLASH_VIDEO):
-        splash = VideoSplash()
-        loop   = QEventLoop()
+    # ── Opening splash ───────────────────────────────────────────────────────
+    splash = VideoSplash()
+    if not splash.pixmap().isNull():
+        loop = QEventLoop()
         splash.finished.connect(loop.quit)
         splash.start()
-        loop.exec_()          # blocks here until video + hold timer finish
+        loop.exec_()
         splash.close()
-        splash.deleteLater()
 
     # ── Resolve file paths ────────────────────────────────────────────────────
     if len(sys.argv) >= 3:
