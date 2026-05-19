@@ -29,12 +29,14 @@ from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
 from PyQt5.QtGui import QFont, QPixmap, QImage
 
-# Splash video (MP4) played frame-by-frame via ffmpeg pipe — no GStreamer needed.
-# Falls back to the static PNG if the video is absent or unreadable.
-SPLASH_VIDEO   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash.mp4")
-SPLASH_IMAGE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splash_frame.png")
-SPLASH_WIDTH   = 500          # display width in pixels (height scaled proportionally)
-SPLASH_EXTRA_MS = 2000        # milliseconds to hold the last frame after video ends
+# Two-phase splash: branding video → app-name video.
+# Both decoded frame-by-frame via ffmpeg pipe — no GStreamer needed.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SPLASH_VIDEO_1  = os.path.join(_HERE, "splash.mp4")       # amani Astro branding
+SPLASH_VIDEO_2  = os.path.join(_HERE, "splash_app.mp4")   # Faraday Explorer title
+SPLASH_IMAGE    = os.path.join(_HERE, "splash_frame.png") # static fallback
+SPLASH_WIDTH    = 500   # display width in pixels (height scaled proportionally)
+SPLASH_EXTRA_MS = 1000  # ms to hold last frame of video 2 before closing
 
 
 # ── Physical constants ────────────────────────────────────────────────────────
@@ -454,125 +456,152 @@ class MapCanvas(FigureCanvas):
 # ── Opening splash ────────────────────────────────────────────────────────────
 
 class VideoSplash(QSplashScreen):
-    """Plays the splash video frame-by-frame via an ffmpeg pipe + QTimer.
+    """Two-phase animated splash screen using ffmpeg pipe decoding.
 
-    No GStreamer / QtMultimedia dependency.  Fades in over ~0.4 s, plays every
-    frame at the correct fps, holds the last frame for SPLASH_EXTRA_MS, then
-    emits `finished`.  Falls back to a static PNG if the video cannot be read.
+    Phase 1 — branding (splash.mp4):  fade in → play → fade out
+    Phase 2 — app title (splash_app.mp4): fade in → play → hold 1 s → finished
+
+    No GStreamer dependency. Falls back to static PNG if both videos are absent.
     """
 
     finished = pyqtSignal()
 
+    _FADE_STEPS = 20   # steps for each fade (20 × 16 ms ≈ 0.32 s)
+
     def __init__(self):
-        self._frames = []
-        self._fps    = 25.0
-        self._idx    = 0
+        # Pre-load both video frame sequences
+        self._v1, self._fps1 = self._load(SPLASH_VIDEO_1)
+        self._v2, self._fps2 = self._load(SPLASH_VIDEO_2)
 
-        pixmap = QPixmap()
-
-        # Try to decode the video with ffmpeg
-        if os.path.exists(SPLASH_VIDEO):
-            try:
-                info = self._probe(SPLASH_VIDEO)
-                if info:
-                    src_w, src_h, fps = info
-                    self._fps    = fps
-                    self._frames = self._pipe_frames(SPLASH_VIDEO, src_w, src_h)
-                    if self._frames:
-                        pixmap = self._frames[0]
-            except Exception:
-                pass
-
-        # Static PNG fallback
+        # Initial pixmap: first frame of whichever video loads first
+        first = (self._v1 or self._v2)
+        pixmap = first[0] if first else QPixmap()
         if pixmap.isNull() and os.path.exists(SPLASH_IMAGE):
             pixmap = QPixmap(SPLASH_IMAGE)
 
         super().__init__(pixmap, Qt.WindowStaysOnTopHint)
         self.setWindowOpacity(0.0)
 
-        interval = max(16, int(1000.0 / self._fps))
-        self._frame_timer = QTimer(self, interval=interval)
+        self._phase      = 1      # 1 = branding, 2 = app title
+        self._idx        = 0
+        self._fade_step  = 0
+
+        self._frame_timer = QTimer(self)
         self._frame_timer.timeout.connect(self._next_frame)
 
         self._hold_timer = QTimer(self, singleShot=True)
         self._hold_timer.timeout.connect(self.finished)
 
-        self._fade_steps = 0   # counts fade-in ticks
-
     # ── public ────────────────────────────────────────────────────────────────
     def start(self):
         self.show()
         QApplication.processEvents()
-        self._fade_steps = 0
-        self._tick_fade()
+        self._begin_phase(1)
 
-    # ── fade-in (20 steps × 16 ms ≈ 0.32 s) ─────────────────────────────────
-    def _tick_fade(self):
-        self._fade_steps += 1
-        opacity = min(1.0, self._fade_steps / 20.0)
+    # ── phase control ─────────────────────────────────────────────────────────
+    def _begin_phase(self, phase):
+        self._phase     = phase
+        self._idx       = 0
+        self._fade_step = 0
+        frames = self._v1 if phase == 1 else self._v2
+        if frames:
+            self.setPixmap(frames[0])
+            self.repaint()
+        self._fade_in()
+
+    def _fade_in(self):
+        self._fade_step += 1
+        opacity = min(1.0, self._fade_step / self._FADE_STEPS)
         self.setWindowOpacity(opacity)
         QApplication.processEvents()
         if opacity < 1.0:
-            QTimer.singleShot(16, self._tick_fade)
+            QTimer.singleShot(16, self._fade_in)
         else:
-            if self._frames:
+            frames = self._v1 if self._phase == 1 else self._v2
+            if frames:
+                fps = self._fps1 if self._phase == 1 else self._fps2
+                self._frame_timer.setInterval(max(16, int(1000.0 / fps)))
                 self._frame_timer.start()
             else:
-                self._hold_timer.start(4000)   # static image: hold 4 s
+                self._on_video_done()
+
+    def _fade_out(self):
+        self._fade_step -= 1
+        opacity = max(0.0, self._fade_step / self._FADE_STEPS)
+        self.setWindowOpacity(opacity)
+        QApplication.processEvents()
+        if opacity > 0.0:
+            QTimer.singleShot(16, self._fade_out)
+        else:
+            self._begin_phase(2)
 
     # ── frame playback ────────────────────────────────────────────────────────
     def _next_frame(self):
         self._idx += 1
-        if self._idx >= len(self._frames):
+        frames = self._v1 if self._phase == 1 else self._v2
+        if self._idx >= len(frames):
             self._frame_timer.stop()
-            self._hold_timer.start(SPLASH_EXTRA_MS)
+            self._on_video_done()
             return
-        self.setPixmap(self._frames[self._idx])
+        self.setPixmap(frames[self._idx])
         self.repaint()
+
+    def _on_video_done(self):
+        if self._phase == 1:
+            # Fade out branding, then start app-title video
+            self._fade_step = self._FADE_STEPS
+            self._fade_out()
+        else:
+            # Hold last frame then signal done
+            self._hold_timer.start(SPLASH_EXTRA_MS)
 
     # ── ffmpeg helpers ────────────────────────────────────────────────────────
     @staticmethod
-    def _probe(path):
-        """Return (width, height, fps) for the first video stream via ffprobe."""
-        raw = subprocess.check_output(
-            ['ffprobe', '-v', 'quiet', '-print_format', 'json',
-             '-show_streams', path],
-            stderr=subprocess.DEVNULL
-        )
-        for s in json.loads(raw).get('streams', []):
-            if s.get('codec_type') == 'video':
-                w, h = s['width'], s['height']
-                num, den = s.get('r_frame_rate', '25/1').split('/')
-                return w, h, float(num) / float(den)
-        return None
-
-    @staticmethod
-    def _pipe_frames(path, src_w, src_h):
-        """Decode all frames via ffmpeg stdout pipe; return list of QPixmap."""
-        dst_w = SPLASH_WIDTH
-        dst_h = int(src_h * dst_w / src_w)
-        if dst_h % 2:
-            dst_h += 1
-
-        proc = subprocess.Popen(
-            ['ffmpeg', '-i', path,
-             '-vf', f'scale={dst_w}:{dst_h}',
-             '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-        )
-        frame_bytes = dst_w * dst_h * 3
-        frames = []
-        while True:
-            raw = proc.stdout.read(frame_bytes)
-            if len(raw) < frame_bytes:
-                break
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape((dst_h, dst_w, 3))
-            img = QImage(arr.tobytes(), dst_w, dst_h,
-                         dst_w * 3, QImage.Format_RGB888)
-            frames.append(QPixmap.fromImage(img))
-        proc.stdout.close()
-        proc.wait()
-        return frames
+    def _load(path):
+        """Return (frames, fps) for a video file, or ([], 25.0) on failure."""
+        if not os.path.exists(path):
+            return [], 25.0
+        try:
+            raw = subprocess.check_output(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                 '-show_streams', path],
+                stderr=subprocess.DEVNULL
+            )
+            info = None
+            for s in json.loads(raw).get('streams', []):
+                if s.get('codec_type') == 'video':
+                    w, h = s['width'], s['height']
+                    num, den = s.get('r_frame_rate', '25/1').split('/')
+                    info = (w, h, float(num) / float(den))
+                    break
+            if not info:
+                return [], 25.0
+            src_w, src_h, fps = info
+            dst_w = SPLASH_WIDTH
+            dst_h = int(src_h * dst_w / src_w)
+            if dst_h % 2:
+                dst_h += 1
+            proc = subprocess.Popen(
+                ['ffmpeg', '-i', path,
+                 '-vf', f'scale={dst_w}:{dst_h}:flags=lanczos',
+                 '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            frame_bytes = dst_w * dst_h * 3
+            frames = []
+            while True:
+                chunk = proc.stdout.read(frame_bytes)
+                if len(chunk) < frame_bytes:
+                    break
+                arr = np.frombuffer(chunk, dtype=np.uint8).reshape((dst_h, dst_w, 3))
+                img = QImage(arr.tobytes(), dst_w, dst_h,
+                             dst_w * 3, QImage.Format_RGB888)
+                frames.append(QPixmap.fromImage(img))
+            proc.stdout.close()
+            proc.wait()
+            return frames, fps
+        except Exception:
+            return [], 25.0
 
 
 # ── Startup file-picker dialog ────────────────────────────────────────────────

@@ -7,6 +7,7 @@
 # Video files — splash.mp4 is intentionally kept (it's the app logo)
 *.mp4
 !splash.mp4
+!splash_app.mp4
 *.webm
 
 # Output files
