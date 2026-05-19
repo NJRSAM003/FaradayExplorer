@@ -29,16 +29,13 @@ if [ -z "$CONDA_BASE" ]; then
     exit 1
 fi
 
-source "$CONDA_BASE/etc/profile.d/conda.sh"
+# Use the env's Python directly — works in non-interactive shells (desktop launchers)
+ENV_PYTHON="$CONDA_BASE/envs/$ENV_NAME/bin/python3"
 
-# ── Check the env exists ──────────────────────────────────────────────────────
-if ! conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
-    echo "Conda env '${ENV_NAME}' not found."
-    echo "Create it with:  conda env create -f \"${SCRIPT_DIR}/environment.yml\""
-    echo "Then re-run this script."
+if [ ! -x "$ENV_PYTHON" ]; then
+    echo "ERROR: Conda env '$ENV_NAME' not found at $CONDA_BASE/envs/$ENV_NAME" >&2
+    echo "Create it with:  conda env create -f \"${SCRIPT_DIR}/environment.yml\"" >&2
     exit 1
 fi
 
-conda activate "$ENV_NAME"
-
-exec python3 "${SCRIPT_DIR}/faraday_explorer.py" "$@"
+exec "$ENV_PYTHON" "${SCRIPT_DIR}/faraday_explorer.py" "$@"
