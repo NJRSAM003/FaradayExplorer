@@ -55,7 +55,8 @@ echo "[3/4] Installing desktop entry..."
 DESKTOP_DIR="$HOME/.local/share/applications"
 mkdir -p "$DESKTOP_DIR"
 
-sed "s|Exec=.*|Exec=${SCRIPT_DIR}/launch_faraday_explorer.sh ${ENV_NAME}|g" \
+sed -e "s|Exec=.*|Exec=${SCRIPT_DIR}/launch_faraday_explorer.sh ${ENV_NAME}|g" \
+    -e "s|Icon=.*|Icon=${SCRIPT_DIR}/FEIcon.png|g" \
     "$SCRIPT_DIR/faraday_explorer.desktop" > "$DESKTOP_DIR/faraday_explorer.desktop"
 
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
