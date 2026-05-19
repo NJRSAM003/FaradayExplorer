@@ -1,6 +1,6 @@
-# QU Viewer
+# Faraday Explorer
 
-An interactive polarisation model viewer for radio astronomy QU-fitting. The tool
+An interactive Faraday depth polarisation model viewer for radio astronomy. The tool
 allows a researcher to visually compare RM-Tools polarisation models against real
 Faraday Dispersion Function (FDF) data extracted from FITS image cubes. Parameter
 exploration is done in real time via sliders and editable text fields, making it
@@ -23,42 +23,54 @@ fractional polarisation spectra at any chosen sky position.
 
 ## Installation
 
-The tool requires a conda environment named `narnia` containing the following
-packages:
+### Prerequisites
 
-```
-numpy
-scipy
-matplotlib
-astropy
-PyQt5
-```
+- [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html)
+- `ffmpeg` — bundled automatically via the conda environment (no manual install needed)
 
-To create the environment from scratch:
+### Steps
 
 ```bash
-conda create -n narnia python=3.10 numpy scipy matplotlib astropy pyqt
-conda activate narnia
+git clone https://github.com/NJRSAM003/FaradayExplorer.git
+cd FaradayExplorer
+bash install.sh
+```
+
+`install.sh` will:
+1. Create a conda environment called `faraday_explorer` with all dependencies
+2. Install a desktop launcher so Faraday Explorer appears in your application menu
+3. Make the launcher script executable
+
+To use a custom environment name:
+
+```bash
+bash install.sh my_env_name
 ```
 
 ---
 
 ## Quick Start
 
-**Full mode** (FDF cube + Stokes I, Q, U cubes):
+**From the application menu:** search for *Faraday Explorer* and double-click.
+
+**From the terminal:**
 
 ```bash
-conda run -n narnia python3 qu_viewer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
+./launch_faraday_explorer.sh
 ```
 
-**FDF-only mode** (no Stokes cubes — model FDF comparison only, no QU scatter from data):
+A file picker dialog opens on launch. Select your FITS files and frequency list,
+then click **Open** to load the data. All file paths are remembered between sessions.
+
+**Command-line mode** (skip the dialog):
 
 ```bash
-conda run -n narnia python3 qu_viewer.py FDF.fits freqFile.dat
-```
+# FDF-only mode
+conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits freqFile.dat
 
-A single application window opens. The FDF map and parameter panels are dockable
-sub-windows that can be detached, floated, and repositioned independently.
+# Full mode (FDF + Stokes I, Q, U)
+conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
+```
 
 ---
 
@@ -74,6 +86,9 @@ rendered on a downsampled grid (every 24th pixel; `MAP_STEP = 24`) using an
 **Zoom:** scroll the mouse wheel up to zoom in toward the cursor; scroll down to
 zoom out. This operates on the matplotlib axes limits directly and does not affect
 the aperture coordinates.
+
+**Pan:** press and hold the middle mouse button (scroll wheel click) and drag to
+pan around the image.
 
 **Aperture selection workflow:**
 
@@ -128,7 +143,7 @@ corresponding SPW centre frequencies.
 Shows:
 - **Model |FDF|** (blue line) — the amplitude of the Faraday Dispersion Function
   computed from the current model parameters by RM synthesis over the model
-  Faraday depth grid (-600 to +600 rad/m²).
+  Faraday depth grid (−600 to +600 rad/m²).
 - **Real |FDF|** (orange line) — the aperture-summed FDF extracted from the FITS
   cube, normalised to the model peak amplitude for shape comparison.
 - **RMSF** (grey shaded region and dashed line) — the dirty beam in Faraday space,
@@ -137,6 +152,10 @@ Shows:
   RM parameter(s) of the current model, one colour per component.
 - **Peak annotations** — detected peaks in both the model and data FDFs are marked
   with scatter points and labelled with their Faraday depth in rad/m².
+
+**View menu:** if any panel is accidentally closed, reopen it via
+*View → Peak FDF Map* or *View → Model & Parameters*. *View → Restore default layout*
+re-docks all panels to their original positions.
 
 ---
 
@@ -172,7 +191,7 @@ remain empty.
 Plain text, one frequency per line in Hz. Each line corresponds to one spectral
 window (SPW) centre frequency used during imaging.
 
-The 9 SPW centre frequencies used in this project are:
+Example — 9 MeerKAT L-band SPW centre frequencies:
 
 ```
 9.16272329e+08
@@ -186,7 +205,7 @@ The 9 SPW centre frequencies used in this project are:
 1.64352233e+09
 ```
 
-(range: 916 MHz to 1644 MHz, MeerKAT L-band)
+(range: 916 MHz to 1644 MHz)
 
 ---
 
@@ -201,12 +220,12 @@ Faraday depth domain via RM synthesis.
 | m1 | `m1` | Single Faraday-thin source. `P = p0 exp(2i(chi0 + RM lambda^2))` | p0, chi0, RM |
 | m2 | `m2` | Thin source with external Faraday dispersion screen. `P = p0 exp(2i(...)) exp(-2 sigma_RM^2 lambda^4)` | p0, chi0, RM, sigma_RM |
 | m5 | `m5` | Single Burn slab (uniform differential Faraday rotation). Top-hat FDF from RM to RM + dRM; FDF peak at RM + dRM/2. | p0, chi0, RM, dRM |
-| m6 | `m6` | Double Burn slab — two independent differential-rotation components. FDF peaks at RM1 + dRM1/2 and RM2 + dRM2/2. | p1, chi1, RM1, dRM1, p2, chi2, RM2, dRM2 |
-| m7 | `m7` | Internal Faraday dispersion + differential rotation. `P = p0 exp(2i(...)) * (1 - exp(-S))/S` where `S = 2 sigma^2 lambda^4 - 2i dRM lambda^2` | p0, chi0, RM, dRM, sigma_RM |
+| m6 | `m6` | Double Burn slab — two independent differential-rotation components. | p1, chi1, RM1, dRM1, p2, chi2, RM2, dRM2 |
+| m7 | `m7` | Internal Faraday dispersion + differential rotation. | p0, chi0, RM, dRM, sigma_RM |
 | m11 | `m11` | Two independent Faraday-thin sources. Sum of two m1 components. | p1, chi1, RM1, p2, chi2, RM2 |
 | m3 | `m3` | Two thin sources with a shared external dispersion screen. | p1, chi1, RM1, p2, chi2, RM2, sigma_RM |
 | m4 | `m4` | Two thin sources, each with its own external dispersion screen. | p1, chi1, RM1, sigma_RM1, p2, chi2, RM2, sigma_RM2 |
-| m12 | `m12` | Internal Faraday dispersion + differential rotation inside source, plus a separate foreground external screen. | p0, chi0, RM_screen, dRM, sigma_RM_int, sigma_RM_fg |
+| m12 | `m12` | Internal Faraday dispersion + differential rotation inside source, plus a foreground external screen. | p0, chi0, RM_screen, dRM, sigma_RM_int, sigma_RM_fg |
 | m111 | `m111` | Three independent Faraday-thin sources. Sum of three m1 components. | p1, chi1, RM1, p2, chi2, RM2, p3, chi3, RM3 |
 
 **Parameter notation:**
@@ -224,7 +243,7 @@ A diagnostic test suite verifies that all 10 models produce FDF peaks at
 analytically-expected Faraday depths.
 
 ```bash
-python3 test_models.py freqFile.dat
+conda run -n faraday_explorer python3 test_models.py freqFile.dat
 ```
 
 For each model, a synthetic `P(lambda^2)` spectrum is generated using parameters
@@ -266,7 +285,7 @@ label refer to downsampled pixels, not native image pixels. For quantitative
 analysis, extract spectra from the full-resolution cube using RM-Tools or CARTA.
 
 **Faraday depth grid is fixed.** The model FDF is always computed on a fixed grid
-of 2401 points from -600 to +600 rad/m², regardless of the range in the FITS cube.
+of 2401 points from −600 to +600 rad/m², regardless of the range in the FITS cube.
 Components with |RM| > 600 rad/m² will not be visible. The real FDF is plotted on
 its native axis from the FITS header.
 

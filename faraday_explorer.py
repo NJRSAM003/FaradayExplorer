@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QU Viewer — Interactive QU-fitting polarisation model viewer.
+Faraday Explorer — Interactive Faraday depth polarisation model viewer.
 
 PyQt5 application: native controls, embedded matplotlib canvases.
 Run:  conda run -n narnia python3 qu_viewer.py FDF.fits I.fits Q.fits U.fits freqFile.dat

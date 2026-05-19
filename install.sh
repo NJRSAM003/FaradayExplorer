@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QU Viewer — one-time install helper.
+# Faraday Explorer — one-time install helper.
 # Run once after cloning:  bash install.sh [conda_env_name]
 #
 # What it does:
@@ -9,9 +9,9 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_NAME="${1:-qu_viewer}"
+ENV_NAME="${1:-faraday_explorer}"
 
-echo "=== QU Viewer installer ==================================="
+echo "=== Faraday Explorer installer ==================================="
 echo "Install directory : $SCRIPT_DIR"
 echo "Conda environment : $ENV_NAME"
 echo "==========================================================="
@@ -47,14 +47,14 @@ echo "[2/3] Installing desktop entry..."
 DESKTOP_DIR="$HOME/.local/share/applications"
 mkdir -p "$DESKTOP_DIR"
 
-sed "s|Exec=.*|Exec=${SCRIPT_DIR}/launch_qu_viewer.sh ${ENV_NAME}|g" \
-    "$SCRIPT_DIR/qu_viewer.desktop" > "$DESKTOP_DIR/qu_viewer.desktop"
+sed "s|Exec=.*|Exec=${SCRIPT_DIR}/launch_faraday_explorer.sh ${ENV_NAME}|g" \
+    "$SCRIPT_DIR/faraday_explorer.desktop" > "$DESKTOP_DIR/faraday_explorer.desktop"
 
 # ── 3. Permissions ───────────────────────────────────────────────────────────
 echo "[3/3] Setting permissions..."
-chmod +x "$SCRIPT_DIR/launch_qu_viewer.sh"
+chmod +x "$SCRIPT_DIR/launch_faraday_explorer.sh"
 
 echo ""
-echo "Done!  Launch QU Viewer with:"
-echo "  ${SCRIPT_DIR}/launch_qu_viewer.sh"
-echo "  — or find 'QU Viewer' in your application menu."
+echo "Done!  Launch Faraday Explorer with:"
+echo "  ${SCRIPT_DIR}/launch_faraday_explorer.sh"
+echo "  — or find 'Faraday Explorer' in your application menu."

@@ -1,4 +1,4 @@
-name: qu_viewer
+name: faraday_explorer
 channels:
   - conda-forge
   - defaults

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# QU Viewer launcher.
-# Usage:  ./launch_qu_viewer.sh [conda_env_name]
-# Default env name: qu_viewer  (matches environment.yml)
-# Override:         ./launch_qu_viewer.sh narnia
+# Faraday Explorer launcher.
+# Usage:  ./launch_faraday_explorer.sh [conda_env_name]
+# Default env name: faraday_explorer  (matches environment.yml)
+# Override:         ./launch_faraday_explorer.sh narnia
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_NAME="${1:-qu_viewer}"
+ENV_NAME="${1:-faraday_explorer}"
 
 # ── Locate conda ──────────────────────────────────────────────────────────────
 find_conda() {
@@ -41,4 +41,4 @@ fi
 
 conda activate "$ENV_NAME"
 
-exec python3 "${SCRIPT_DIR}/qu_viewer.py" "$@"
+exec python3 "${SCRIPT_DIR}/faraday_explorer.py" "$@"
