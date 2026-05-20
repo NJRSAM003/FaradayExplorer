@@ -3,7 +3,7 @@
 Faraday Explorer — Interactive Faraday depth polarisation model viewer.
 
 PyQt5 application: native controls, embedded matplotlib canvases.
-Run:  conda run -n narnia python3 qu_viewer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
+Run:  conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
 """
 
 import os, sys, json, subprocess
@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QDoubleSpinBox, QSlider, QLineEdit,
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
-    QCheckBox, QSpinBox,
+    QCheckBox, QSpinBox, QMessageBox,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
@@ -331,7 +331,10 @@ class ParamWidget(QFrame):
 # ── MapCanvas: FDF peak map with aperture drawing ────────────────────────────
 
 class MapCanvas(FigureCanvas):
-    aperture_ready = pyqtSignal(np.ndarray, float, float, float)  # mask, cx, cy, r
+    aperture_ready   = pyqtSignal(np.ndarray, float, float, float, float)  # mask,cx,cy,a,b
+    aperture_cleared = pyqtSignal()
+
+    _MIN_DRAG_PX = 4
 
     def __init__(self, peak_map, parent=None):
         self.fig = Figure(facecolor="#111111")
@@ -344,9 +347,8 @@ class MapCanvas(FigureCanvas):
         vhi = float(np.nanpercentile(peak_map, 99.5))
         ax.imshow(peak_map, origin="lower", aspect="equal",
                   cmap="inferno", vmin=vlo, vmax=vhi)
-        ax.set_title("Peak |FDF|  [Jy/beam/RMSF]\n"
-                     "Click to set centre · hold+drag to set radius",
-                     fontsize=8, color="white", pad=3)
+        ax.set_title("Peak |FDF|  [Jy/beam/RMSF]",
+                     fontsize=9, color="white", pad=4)
         ax.set_xlabel("RA pixel (downsampled)", fontsize=7, color="white")
         ax.set_ylabel("Dec pixel (downsampled)", fontsize=7, color="white")
         ax.tick_params(colors="white", labelsize=6)
@@ -355,18 +357,21 @@ class MapCanvas(FigureCanvas):
         self.ax = ax
         self._ny, self._nx = peak_map.shape
 
-        # Aperture drawing state
-        self._state  = "idle"
-        self._centre = None
-        self._patch  = None
-        self._marker = None
-
-        # Middle-button pan state
-        self._panning     = False
-        self._pan_last_xy = None     # last (canvas_x, canvas_y) in display pixels
+        # ── Interaction state ─────────────────────────────────────────────────
+        # States: idle | panning | aperture_wait | aperture_drawing
+        self._state      = "idle"
+        self._pan_ref    = None   # (canvas_x, canvas_y) at pan start
+        self._xlim0      = None   # axes limits at pan start
+        self._ylim0      = None
+        self._press_xy   = None   # canvas pos at last button-press (for drag threshold)
+        self._apert_cx          = None
+        self._apert_cy          = None
+        self._patch             = None
+        self._marker            = None
+        self._aperture_finalised = False
 
         self.mpl_connect("button_press_event",   self._on_press)
-        self.mpl_connect("motion_notify_event",  self._on_drag)
+        self.mpl_connect("motion_notify_event",  self._on_motion)
         self.mpl_connect("button_release_event", self._on_release)
         self.mpl_connect("scroll_event",         self._on_scroll)
 
@@ -382,76 +387,445 @@ class MapCanvas(FigureCanvas):
         self.ax.set_ylim([yc + (y - yc) * factor for y in ylim])
         self.draw_idle()
 
-    # ── Middle-button pan ─────────────────────────────────────────────────────
+    # ── Press ─────────────────────────────────────────────────────────────────
 
     def _on_press(self, ev):
-        if ev.button == 2:                       # middle click → start pan
-            self._panning     = True
-            self._pan_last_xy = (ev.x, ev.y)
-            self.setCursor(Qt.ClosedHandCursor)
+        if ev.inaxes != self.ax:
             return
-        if ev.inaxes != self.ax: return
-        if self._state == "center_set":          # left click → aperture draw
-            self._state = "drawing"
 
-    def _on_drag(self, ev):
-        if self._panning and ev.x is not None:   # middle held → pan
-            dx = ev.x - self._pan_last_xy[0]
-            dy = ev.y - self._pan_last_xy[1]
-            self._pan_last_xy = (ev.x, ev.y)
-            bbox = self.ax.get_window_extent()
-            xl, xr = self.ax.get_xlim()
-            yb, yt = self.ax.get_ylim()
-            sx = (xr - xl) / max(bbox.width,  1)
-            sy = (yt - yb) / max(bbox.height, 1)
-            self.ax.set_xlim(xl - dx * sx, xr - dx * sx)
-            self.ax.set_ylim(yb - dy * sy, yt - dy * sy)
-            self.draw_idle()
+        if ev.button == 2:                          # middle-click → centre view
+            self._centre_view(ev.xdata, ev.ydata)
             return
-        if self._state != "drawing" or ev.inaxes != self.ax: return
-        cx, cy = self._centre
-        r = np.hypot(ev.xdata - cx, ev.ydata - cy)
+
+        if ev.button == 1:
+            self._press_xy = (ev.x, ev.y)
+            if ev.dblclick:
+                if self._aperture_finalised:
+                    # Second double-click clears the existing aperture
+                    self._clear_aperture()
+                    return
+                # Place centre marker; button still held → enter drawing immediately
+                self._place_centre(ev.xdata, ev.ydata)
+                self._state = "aperture_drawing"
+            elif self._state == "aperture_wait":
+                # Single press after centre set → start drawing
+                self._state = "aperture_drawing"
+            else:
+                # Default: start pan
+                self._pan_ref = (ev.x, ev.y)
+                self._xlim0   = self.ax.get_xlim()
+                self._ylim0   = self.ax.get_ylim()
+                self._state   = "panning"
+                self.setCursor(Qt.ClosedHandCursor)
+
+    # ── Motion ────────────────────────────────────────────────────────────────
+
+    def _on_motion(self, ev):
+        if self._state == "panning" and ev.x is not None:
+            self._do_pan(ev.x, ev.y)
+        elif self._state == "aperture_drawing" and ev.inaxes == self.ax:
+            self._update_ellipse(ev.xdata, ev.ydata)
+
+    # ── Release ───────────────────────────────────────────────────────────────
+
+    def _on_release(self, ev):
+        if ev.button == 1:
+            if self._state == "panning":
+                self._state = "idle"
+                self.unsetCursor()
+
+            elif self._state == "aperture_drawing":
+                # Check if mouse actually moved (distinguish click from drag)
+                px, py = self._press_xy or (ev.x, ev.y)
+                moved  = ((ev.x - px)**2 + (ev.y - py)**2) ** 0.5
+
+                if moved < self._MIN_DRAG_PX or ev.inaxes != self.ax:
+                    # No meaningful drag — keep centre set, wait for a drag
+                    self._state = "aperture_wait"
+                else:
+                    self._finalise_aperture(ev.xdata, ev.ydata)
+                    self._state = "idle"
+
+    # ── Pan helpers ───────────────────────────────────────────────────────────
+
+    def _do_pan(self, cx, cy):
+        if self._pan_ref is None:
+            return
+        dx = cx - self._pan_ref[0]
+        dy = cy - self._pan_ref[1]
+        self._pan_ref = (cx, cy)
+        bbox = self.ax.get_window_extent()
+        xl, xr = self.ax.get_xlim()
+        yb, yt = self.ax.get_ylim()
+        sx = (xr - xl) / max(bbox.width,  1)
+        sy = (yt - yb) / max(bbox.height, 1)
+        self.ax.set_xlim(xl - dx * sx, xr - dx * sx)
+        self.ax.set_ylim(yb - dy * sy, yt - dy * sy)
+        self.draw_idle()
+
+    def _centre_view(self, x, y):
+        xl, xr = self.ax.get_xlim()
+        yb, yt = self.ax.get_ylim()
+        hw = (xr - xl) / 2.0
+        hh = (yt - yb) / 2.0
+        self.ax.set_xlim(x - hw, x + hw)
+        self.ax.set_ylim(y - hh, y + hh)
+        self.draw_idle()
+
+    # ── Aperture helpers ──────────────────────────────────────────────────────
+
+    def _place_centre(self, x, y):
+        self._apert_cx, self._apert_cy = x, y
+        if self._marker: self._marker.remove()
+        if self._patch:  self._patch.remove(); self._patch = None
+        self._marker, = self.ax.plot(x, y, "+", color="cyan",
+                                     ms=14, mew=2, zorder=6)
+        self.draw_idle()
+
+    def _update_ellipse(self, x, y):
+        if x is None or y is None:
+            return
+        a = max(abs(x - self._apert_cx), 0.5)
+        b = max(abs(y - self._apert_cy), 0.5)
         if self._patch: self._patch.remove()
-        self._patch = mpatches.Circle((cx, cy), r, fill=False,
-                                       edgecolor="cyan", lw=1.4, ls="--", zorder=5)
+        self._patch = mpatches.Ellipse(
+            (self._apert_cx, self._apert_cy), width=2*a, height=2*b,
+            fill=False, edgecolor="cyan", lw=1.5, ls="--", zorder=5)
         self.ax.add_patch(self._patch)
         self.draw_idle()
 
-    def _on_release(self, ev):
-        if ev.button == 2:                       # middle release → end pan
-            self._panning     = False
-            self._pan_last_xy = None
-            self.unsetCursor()
-            return
-        if ev.inaxes != self.ax:
-            if self._state == "drawing": self._state = "center_set"
-            return
-        if self._state == "idle":
-            self._centre = (ev.xdata, ev.ydata)
-            if self._marker: self._marker.remove()
-            if self._patch:  self._patch.remove(); self._patch = None
-            self._marker = self.ax.scatter(
-                [ev.xdata], [ev.ydata], marker="+",
-                color="cyan", s=140, lw=2, zorder=6)
-            self._state = "center_set"
-            self.draw_idle()
-        elif self._state == "drawing":
-            cx, cy = self._centre
-            r = max(0.5, np.hypot(ev.xdata - cx, ev.ydata - cy))
-            if self._patch: self._patch.remove()
-            self._patch = mpatches.Circle((cx, cy), r, fill=False,
-                                           edgecolor="cyan", lw=1.8, zorder=5)
-            self.ax.add_patch(self._patch)
-            if self._marker: self._marker.remove(); self._marker = None
-            self.draw_idle()
+    def _finalise_aperture(self, x, y):
+        a = max(abs(x - self._apert_cx), 0.5)
+        b = max(abs(y - self._apert_cy), 0.5)
 
-            ys, xs = np.ogrid[0:self._ny, 0:self._nx]
-            mask = (xs - cx)**2 + (ys - cy)**2 <= r**2
-            if mask.sum() > 0:
-                self.aperture_ready.emit(mask, float(cx), float(cy), float(r))
+        if self._patch: self._patch.remove()
+        self._patch = mpatches.Ellipse(
+            (self._apert_cx, self._apert_cy), width=2*a, height=2*b,
+            fill=False, edgecolor="cyan", lw=2.0, zorder=5)
+        self.ax.add_patch(self._patch)
+        if self._marker: self._marker.remove(); self._marker = None
+        self.draw_idle()
 
-            self._state  = "idle"
-            self._centre = None
+        ys, xs = np.ogrid[0:self._ny, 0:self._nx]
+        mask = (((xs - self._apert_cx) / a) ** 2 +
+                ((ys - self._apert_cy) / b) ** 2) <= 1.0
+        if mask.sum() > 0:
+            self._aperture_finalised = True
+            self.aperture_ready.emit(mask,
+                                     float(self._apert_cx),
+                                     float(self._apert_cy),
+                                     float(a), float(b))
+        self._apert_cx = self._apert_cy = None
+
+    def _clear_aperture(self):
+        if self._patch:  self._patch.remove();  self._patch  = None
+        if self._marker: self._marker.remove(); self._marker = None
+        self._aperture_finalised = False
+        self._apert_cx = self._apert_cy = None
+        self._state = "idle"
+        self.draw_idle()
+        self.aperture_cleared.emit()
+
+
+# ── Beam / pixel-scale helpers ────────────────────────────────────────────────
+
+def _read_beam(header):
+    """Return (bmaj_arcsec, bmin_arcsec, bpa_deg) from primary header, or None."""
+    try:
+        bmaj = float(header["BMAJ"]) * 3600   # degrees → arcsec
+        bmin = float(header["BMIN"]) * 3600
+        bpa  = float(header.get("BPA", 0.0))
+        return (round(bmaj, 4), round(bmin, 4), round(bpa, 4))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _read_beam_from_hdul(hdul):
+    """Return (median_beam_tuple, per_channel_array_or_None, source_label).
+
+    median_beam_tuple = (bmaj_arcsec, bmin_arcsec, bpa_deg) or None
+    per_channel_array = np.ndarray shape (N,3) [bmaj,bmin,bpa] in arcsec/deg, or None
+    source_label      = human-readable string describing where the beam came from
+
+    Priority:
+    1. CASA BEAMS binary table extension — returns full per-channel array
+    2. Primary header BMAJ/BMIN/BPA (degrees) — returns single beam, no per-channel
+    """
+    # ── Try CASA BEAMS extension first ────────────────────────────────────────
+    for ext in hdul[1:]:
+        if ext.header.get('EXTNAME', '') == 'BEAMS':
+            try:
+                d    = ext.data
+                cols = [c.name.upper() for c in ext.columns]
+                bmaj_col = ext.columns[cols.index('BMAJ')]
+                unit     = (bmaj_col.unit or '').lower()
+                bmaj_arr = np.array(d['BMAJ'], dtype=float)
+                bmin_arr = np.array(d['BMIN'], dtype=float)
+                bpa_arr  = np.array(d['BPA'],  dtype=float)
+                if 'deg' in unit:
+                    bmaj_arr *= 3600
+                    bmin_arr *= 3600
+                per_ch = np.column_stack([bmaj_arr, bmin_arr, bpa_arr])
+                # Use the channel with the largest beam (worst resolution) as reference
+                idx_max  = int(np.argmax(bmaj_arr))
+                rep_beam = (round(float(bmaj_arr[idx_max]), 4),
+                            round(float(bmin_arr[idx_max]), 4),
+                            round(float(bpa_arr[idx_max]),  4))
+                return rep_beam, per_ch, "CASA BEAMS table"
+            except Exception:
+                pass
+
+    # ── Fall back to primary header ────────────────────────────────────────────
+    b = _read_beam(hdul[0].header)
+    if b is not None:
+        return b, None, "FITS header (BMAJ/BMIN/BPA)"
+
+    return None, None, None
+
+
+def _read_pixscale(header):
+    """Return pixel scale in arcsec/pixel, or None."""
+    for key in ("CDELT2", "CDELT1"):
+        try:
+            v = float(header[key])
+            if v != 0:
+                return abs(v) * 3600
+        except (KeyError, ValueError, TypeError):
+            pass
+    return None
+
+
+class BeamInputDialog(QDialog):
+    """Shown when no FITS cube carries beam information."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Beam Information Required")
+        self.setMinimumWidth(400)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.values = None
+
+        vbox = QVBoxLayout(self)
+        note = QLabel(
+            "No beam information (BMAJ / BMIN / BPA) was found in any of the "
+            "provided FITS cubes.\n\n"
+            "Please enter the restoring beam parameters manually (in arcseconds / degrees)."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #555;")
+        vbox.addWidget(note)
+
+        grp  = QGroupBox("Restoring beam")
+        form = QFormLayout(grp)
+
+        self._bmaj = QDoubleSpinBox()
+        self._bmaj.setRange(0.001, 3600); self._bmaj.setDecimals(3)
+        self._bmaj.setSuffix(' "');       self._bmaj.setValue(15.0)
+
+        self._bmin = QDoubleSpinBox()
+        self._bmin.setRange(0.001, 3600); self._bmin.setDecimals(3)
+        self._bmin.setSuffix(' "');       self._bmin.setValue(12.0)
+
+        self._bpa = QDoubleSpinBox()
+        self._bpa.setRange(-180, 180);    self._bpa.setDecimals(1)
+        self._bpa.setSuffix(' °');        self._bpa.setValue(0.0)
+
+        form.addRow("BMAJ — major axis FWHM:", self._bmaj)
+        form.addRow("BMIN — minor axis FWHM:", self._bmin)
+        form.addRow("BPA  — position angle:",  self._bpa)
+        vbox.addWidget(grp)
+
+        btns   = QHBoxLayout()
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton("OK")
+        ok.setDefault(True)
+        ok.setStyleSheet("background:#1a7abf;color:white;font-weight:bold;"
+                         "padding:4px 18px;border-radius:3px;")
+        ok.clicked.connect(self._ok)
+        btns.addWidget(cancel); btns.addStretch(); btns.addWidget(ok)
+        vbox.addLayout(btns)
+
+    def _ok(self):
+        self.values = (self._bmaj.value(), self._bmin.value(), self._bpa.value())
+        self.accept()
+
+
+def validate_inputs(paths, parent=None):
+    """Check dimensions, extract and validate beam info across all cubes.
+
+    Returns (ok, beam_info) where beam_info is a dict with keys:
+        bmaj, bmin, bpa  — arcseconds / degrees
+        pix_scale        — arcsec per native pixel (may be None)
+        source           — human-readable label for which cube supplied the beam
+    Returns (False, None) if the user should not proceed.
+    """
+    from astropy.io import fits as _fits
+
+    cube_paths = [
+        ("FDF",      paths.get("fdf")),
+        ("Stokes I", paths.get("i")),
+        ("Stokes Q", paths.get("q")),
+        ("Stokes U", paths.get("u")),
+    ]
+    available = [(lbl, p) for lbl, p in cube_paths if p and os.path.exists(p)]
+    if not available:
+        return False, None
+
+    # ── Read headers + full HDU lists (needed for BEAMS extension) ───────────
+    headers = {}
+    hduls   = {}
+    for lbl, p in available:
+        try:
+            hdul = _fits.open(p, memmap=True)
+            headers[lbl] = hdul[0].header
+            hduls[lbl]   = hdul
+        except Exception as e:
+            QMessageBox.critical(parent, "File Error",
+                                 f"Could not read {lbl}:\n{p}\n\n{e}")
+            return False, None
+
+    # ── Spatial dimension check ───────────────────────────────────────────────
+    shapes = {lbl: (h.get("NAXIS1"), h.get("NAXIS2")) for lbl, h in headers.items()}
+    unique_shapes = set(shapes.values())
+    if len(unique_shapes) > 1:
+        detail = "\n".join(f"  {lbl}: {n1} × {n2} px"
+                           for lbl, (n1, n2) in shapes.items())
+        QMessageBox.critical(
+            parent, "Dimension Mismatch",
+            "Spatial dimensions do not match across cubes:\n\n"
+            + detail +
+            "\n\nAll cubes must share the same RA/Dec pixel grid."
+        )
+        return False, None
+
+    # ── Pixel scale ───────────────────────────────────────────────────────────
+    pix_scale = None
+    for h in headers.values():
+        ps = _read_pixscale(h)
+        if ps:
+            pix_scale = ps
+            break
+
+    # ── Beam extraction ───────────────────────────────────────────────────────
+    raw_beams    = {lbl: _read_beam_from_hdul(hduls[lbl]) for lbl in hduls}
+    # raw_beams[lbl] = (median_tuple, per_channel_or_None, source_label)
+    beams        = {lbl: r[0] for lbl, r in raw_beams.items() if r[0] is not None}
+    per_ch_beams = {lbl: r[1] for lbl, r in raw_beams.items() if r[1] is not None}
+    sources      = {lbl: r[2] for lbl, r in raw_beams.items() if r[0] is not None}
+
+    # ── Inform user when CASA BEAMS extension(s) found ───────────────────────
+    casa_cubes = [lbl for lbl, r in raw_beams.items()
+                  if r[0] is not None and r[2] == "CASA BEAMS table"]
+    if casa_cubes:
+        details = "\n".join(
+            f"  {lbl}: largest beam = {beams[lbl][0]:.3f}\" × {beams[lbl][1]:.3f}\""
+            f"  (out of {len(per_ch_beams[lbl])} channels)"
+            for lbl in casa_cubes
+        )
+        QMessageBox.information(
+            parent, "CASA Per-Channel Beam Tables Found",
+            f"CASA per-channel restoring beam tables were found in:\n\n"
+            f"{details}\n\n"
+            f"The largest beam per cube is shown above and will be used as the "
+            f"reference for aperture size reporting. Individual per-channel beams "
+            f"will be used for aperture photometry during the interactive session.\n\n"
+            f"Cubes without a BEAMS table will use a uniform aperture "
+            f"for all frequency slices."
+        )
+
+    # Case A: no beam info anywhere → ask user, then confirm
+    if not beams:
+        dlg = BeamInputDialog(parent)
+        if dlg.exec_() != QDialog.Accepted or dlg.values is None:
+            return False, None
+        bmaj, bmin, bpa = dlg.values
+        return _confirm_resolution(
+            parent, headers,
+            dict(bmaj=bmaj, bmin=bmin, bpa=bpa,
+                 pix_scale=pix_scale, source="user input")
+        )
+
+    # Case B: beams differ beyond tolerance → hard stop
+    # Tolerance mirrors CASA imsmooth: 2% on axes, 1° on BPA.
+    def _beams_match(b1, b2, frac_tol=0.02, bpa_tol=1.0):
+        bm1, bn1, bp1 = b1
+        bm2, bn2, bp2 = b2
+        return (abs(bm1 - bm2) / max(bm1, bm2) <= frac_tol and
+                abs(bn1 - bn2) / max(bn1, bn2) <= frac_tol and
+                abs(bp1 - bp2) <= bpa_tol)
+
+    beam_list  = list(beams.values())
+    ref_beam   = beam_list[0]
+    mismatched = {lbl: b for lbl, b in beams.items()
+                  if not _beams_match(b, ref_beam)}
+
+    if mismatched:
+        all_beams = {**{list(beams.keys())[0]: ref_beam}, **mismatched}
+        detail = "\n".join(
+            f"  {lbl}: BMAJ={bm:.4f}\", BMIN={bn:.4f}\", BPA={bp:.2f}°"
+            for lbl, (bm, bn, bp) in beams.items()
+        )
+        QMessageBox.critical(
+            parent, "Beam Mismatch",
+            "Beam information differs between cubes beyond tolerance "
+            "(2% on axes, 1° on BPA):\n\n"
+            + detail +
+            "\n\nCubes with mismatched beams cannot be directly compared.\n"
+            "Please re-image using a common restoring beam before proceeding."
+        )
+        return False, None
+
+    # Case C: beam found in some but not all → warn, continue
+    missing = [lbl for lbl in headers if lbl not in beams]
+    first_lbl  = next(iter(beams))
+    bmaj, bmin, bpa = beams[first_lbl]
+
+    if missing:
+        QMessageBox.warning(
+            parent, "Missing Beam Info",
+            f"Beam information is absent from: {', '.join(missing)}.\n\n"
+            f"The beam from {first_lbl} will be used for aperture calculations:\n"
+            f"  BMAJ = {bmaj:.2f}\"  BMIN = {bmin:.2f}\"  BPA = {bpa:.1f}°"
+        )
+
+    return _confirm_resolution(
+        parent, headers,
+        dict(bmaj=bmaj, bmin=bmin, bpa=bpa,
+             pix_scale=pix_scale, source=first_lbl,
+             per_channel=per_ch_beams.get(first_lbl))
+    )
+
+
+def _confirm_resolution(parent, headers, beam_info):
+    """Show resolution-assumption confirmation — skipped when CASA BEAMS tables cover all Stokes cubes."""
+    stokes_loaded = [lbl for lbl in ("Stokes I", "Stokes Q", "Stokes U")
+                     if lbl in headers]
+    if not stokes_loaded:
+        return True, beam_info
+
+    # CASA per-channel beam table already encodes per-slice resolution — no assumption needed
+    if beam_info.get("per_channel") is not None:
+        return True, beam_info
+
+    msg = QMessageBox(parent)
+    msg.setWindowTitle("Resolution Assumption")
+    msg.setIcon(QMessageBox.Information)
+    msg.setText("<b>Assumption: uniform angular resolution</b>")
+    msg.setInformativeText(
+        "It is assumed that all frequency slices in the Stokes "
+        f"{', '.join(s.replace('Stokes ', '') for s in stokes_loaded)} "
+        "cubes have been imaged or smoothed to the same angular resolution.\n\n"
+        "If this is not the case, aperture-averaged fractional polarisation "
+        "values (q = Q/I, u = U/I) will be unreliable."
+    )
+    msg.setStandardButtons(QMessageBox.Cancel)
+    proceed = msg.addButton("Proceed", QMessageBox.AcceptRole)
+    msg.setDefaultButton(proceed)
+    msg.exec_()
+    if msg.clickedButton() is not proceed:
+        return False, None
+    return True, beam_info
 
 
 # ── Opening splash ────────────────────────────────────────────────────────────
@@ -612,11 +986,11 @@ class LaunchDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("QU Viewer — Open Files")
+        self.setWindowTitle("Faraday Explorer — Open Files")
         self.setMinimumWidth(600)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        self._cfg      = QSettings("QUViewer", "QUViewer")
+        self._cfg      = QSettings("FaradayExplorer", "FaradayExplorer")
         self._last_dir = self._cfg.value("last_dir", os.path.expanduser("~"))
         self.paths     = {}   # populated when user clicks Open
 
@@ -629,7 +1003,7 @@ class LaunchDialog(QDialog):
 
         # Header
         hdr = QLabel(
-            "<h2 style='margin:0;'>QU Viewer</h2>"
+            "<h2 style='margin:0;'>Faraday Explorer</h2>"
             "<p style='color:#666; margin:2px 0 0;'>"
             "Interactive polarisation model viewer — MeerKAT</p>"
         )
@@ -706,9 +1080,10 @@ class LaunchDialog(QDialog):
         self._open_btn = QPushButton("Open Viewer")
         self._open_btn.setEnabled(False)
         self._open_btn.setDefault(True)
+        self._open_btn.setMinimumWidth(140)
         self._open_btn.setStyleSheet(
             "QPushButton:enabled{background:#1a7abf;color:white;"
-            "font-weight:bold;padding:4px 18px;border-radius:3px;}"
+            "font-weight:bold;padding:4px 24px;border-radius:3px;}"
         )
         self._open_btn.clicked.connect(self._accept)
         btn_row.addWidget(cancel)
@@ -792,9 +1167,10 @@ class LaunchDialog(QDialog):
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, fits_path, i_path, q_path, u_path, freqs, map_step=MAP_STEP):
+    def __init__(self, fits_path, i_path, q_path, u_path, freqs,
+                 map_step=MAP_STEP, beam_info=None):
         super().__init__()
-        self.setWindowTitle("QU Viewer  —  Polarisation Model Viewer")
+        self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
 
         # ── Physics setup ─────────────────────────────────────────────────────
@@ -813,7 +1189,8 @@ class MainWindow(QMainWindow):
 
         # ── Load data ─────────────────────────────────────────────────────────
         self.has_data = self.has_qu = False
-        self.map_step = map_step
+        self.map_step  = map_step
+        self.beam_info = beam_info  # dict or None
         self._load_cubes(fits_path, i_path, q_path, u_path)
 
         # ── Build UI ──────────────────────────────────────────────────────────
@@ -835,6 +1212,15 @@ class MainWindow(QMainWindow):
         h = hdu[0].header
         n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
         self.phi_data = cr + (np.arange(1, n3+1) - cp) * cd
+
+        # Build a 2-D celestial WCS from the FDF header for pixel → RA/Dec
+        self.wcs2d = None
+        try:
+            from astropy.wcs import WCS
+            self.wcs2d = WCS(h, naxis=2)
+        except Exception as e:
+            print(f"[WARN] Could not build celestial WCS: {e}")
+
         print(f"Computing peak map…  (map_step={self.map_step})")
         self.peak_map = self.fdf_data[:, ::self.map_step, ::self.map_step].max(axis=0)
         self.has_data = True
@@ -853,33 +1239,48 @@ class MainWindow(QMainWindow):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Map dock (left, dockable / floatable) ─────────────────────────────
-        if self.has_data:
-            self.map_canvas = MapCanvas(self.peak_map)
-            self.map_canvas.aperture_ready.connect(self._on_aperture)
-            self._map_dock = QDockWidget("Peak |FDF| Map", self)
-            self._map_dock.setWidget(self.map_canvas)
-            self._map_dock.setFeatures(QDockWidget.DockWidgetMovable |
-                                        QDockWidget.DockWidgetFloatable |
-                                        QDockWidget.DockWidgetClosable)
-            self.addDockWidget(Qt.LeftDockWidgetArea, self._map_dock)
-            map_dock = self._map_dock   # alias for the View menu below
+        # Need a central widget for QMainWindow even when everything is in docks
+        self.setCentralWidget(QWidget())   # empty placeholder
+        self.centralWidget().setMaximumSize(0, 0)
 
-        # ── Controls dock (right, dockable / floatable) ───────────────────────
-        ctrl_widget = self._build_controls()
+        dock_features = (QDockWidget.DockWidgetMovable |
+                         QDockWidget.DockWidgetFloatable |
+                         QDockWidget.DockWidgetClosable)
+
+        # ── Controls dock (top-left) ──────────────────────────────────────────
         self._ctrl_dock = QDockWidget("Model & Parameters", self)
-        self._ctrl_dock.setWidget(ctrl_widget)
-        self._ctrl_dock.setFeatures(QDockWidget.DockWidgetMovable |
-                                     QDockWidget.DockWidgetFloatable |
-                                     QDockWidget.DockWidgetClosable)
-        # When the panel detaches, give it a comfortable width for sliders
+        self._ctrl_dock.setWidget(self._build_controls())
+        self._ctrl_dock.setFeatures(dock_features)
         self._ctrl_dock.topLevelChanged.connect(
             lambda floating: self._ctrl_dock.resize(480, 750) if floating else None
         )
-        self.addDockWidget(Qt.RightDockWidgetArea, self._ctrl_dock)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self._ctrl_dock)
 
-        # ── Central widget: science plots only ───────────────────────────────
-        self.setCentralWidget(self._build_plots())
+        # ── Map dock (bottom-left, stacked under controls) ────────────────────
+        if self.has_data:
+            self.map_canvas = MapCanvas(self.peak_map)
+            self.map_canvas.aperture_ready.connect(self._on_aperture)
+            self.map_canvas.aperture_cleared.connect(self._on_aperture_cleared)
+            self._map_dock = QDockWidget("Peak |FDF| Map", self)
+            self._map_dock.setWidget(self._build_map_panel())
+            self._map_dock.setFeatures(dock_features)
+            self.addDockWidget(Qt.LeftDockWidgetArea, self._map_dock)
+            self.splitDockWidget(self._ctrl_dock, self._map_dock, Qt.Vertical)
+
+        # ── QU plot dock (top-right) ──────────────────────────────────────────
+        self._qu_dock = QDockWidget("q & u vs Frequency", self)
+        self._qu_dock.setWidget(self._build_qu_panel())
+        self._qu_dock.setFeatures(dock_features)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._qu_dock)
+
+        # ── FDF plot dock (bottom-right, stacked under QU) ────────────────────
+        self._fdf_dock = QDockWidget("FDF Comparison", self)
+        self._fdf_dock.setWidget(self._build_fdf_panel())
+        self._fdf_dock.setFeatures(dock_features)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._fdf_dock)
+        self.splitDockWidget(self._qu_dock, self._fdf_dock, Qt.Vertical)
+
+        QTimer.singleShot(0, self._apply_default_sizes)
 
         # ── File menu ─────────────────────────────────────────────────────────
         fmenu = self.menuBar().addMenu("&File")
@@ -891,15 +1292,78 @@ class MainWindow(QMainWindow):
 
         # ── View menu — lets user reopen any closed panel ─────────────────────
         view = self.menuBar().addMenu("&View")
-        if self.has_data:
-            view.addAction(map_dock.toggleViewAction())
         view.addAction(self._ctrl_dock.toggleViewAction())
+        if self.has_data:
+            view.addAction(self._map_dock.toggleViewAction())
+        view.addAction(self._qu_dock.toggleViewAction())
+        view.addAction(self._fdf_dock.toggleViewAction())
         view.addSeparator()
         restore = view.addAction("Restore default layout")
         restore.triggered.connect(self._restore_layout)
 
+        # ── Help menu ─────────────────────────────────────────────────────────
+        help_menu = self.menuBar().addMenu("&Help")
+        controls_act = help_menu.addAction("Map controls…")
+        controls_act.triggered.connect(self._show_help_controls)
+        help_menu.addSeparator()
+        about_act = help_menu.addAction("About Faraday Explorer…")
+        about_act.triggered.connect(self._show_about)
+
         # ── Status bar ────────────────────────────────────────────────────────
         self.statusBar().showMessage("Ready — draw an aperture on the map to load real data.")
+
+    def _show_help_controls(self):
+        QMessageBox.information(
+            self, "Map Controls",
+            "<b>Map navigation</b>"
+            "<table cellpadding='3'>"
+            "<tr><td><b>Left-drag</b></td><td>— pan the image</td></tr>"
+            "<tr><td><b>Scroll wheel</b></td><td>— zoom in/out toward the cursor</td></tr>"
+            "<tr><td><b>Middle-click</b></td><td>— centre the view on the click point</td></tr>"
+            "</table>"
+            "<br><b>Aperture drawing</b>"
+            "<table cellpadding='3'>"
+            "<tr><td><b>Double-click</b></td><td>— place the aperture centre</td></tr>"
+            "<tr><td><b>Double-click + hold + drag</b></td><td>— draw the ellipse in one motion</td></tr>"
+            "<tr><td><b>Double-click then click + drag</b></td><td>— alternative two-step draw</td></tr>"
+            "<tr><td><b>Double-click an existing aperture</b></td><td>— clear it</td></tr>"
+            "</table>"
+            "<br>Drag horizontally for a wide ellipse, vertically for a tall one, "
+            "or diagonally for both axes set independently."
+        )
+
+    def _show_about(self):
+        QMessageBox.about(
+            self, "About Faraday Explorer",
+            "<h3>Faraday Explorer</h3>"
+            "<p>Interactive Faraday depth polarisation model viewer "
+            "for radio astronomy.</p>"
+            "<p>Compares the ten polarisation models defined by "
+            "<b>RM-Tools</b> against real Faraday Dispersion Function "
+            "data extracted from FITS image cubes.</p>"
+            "<p><b>Faraday Explorer:</b><br>"
+            "<a href='https://github.com/NJRSAM003/FaradayExplorer'>"
+            "github.com/NJRSAM003/FaradayExplorer</a></p>"
+            "<p><b>RM-Tools</b> (model definitions and RM-synthesis reference):<br>"
+            "<a href='https://github.com/CIRADA-Tools/RM-Tools'>"
+            "github.com/CIRADA-Tools/RM-Tools</a></p>"
+        )
+
+    def _apply_default_sizes(self):
+        """Left column = 1/3 width (ctrl:map = 1:2 vertically), right column = 2/3 (QU:FDF = 1:1)."""
+        w = self.width()
+        h = self.height()
+        left_w  = w // 3
+        right_w = w - left_w
+        if self.has_data:
+            self.resizeDocks([self._ctrl_dock, self._map_dock],
+                             [h // 3, (h * 2) // 3], Qt.Vertical)
+            self.resizeDocks([self._map_dock], [left_w], Qt.Horizontal)
+        else:
+            self.resizeDocks([self._ctrl_dock], [left_w], Qt.Horizontal)
+        self.resizeDocks([self._qu_dock, self._fdf_dock],
+                         [h // 2, h // 2], Qt.Vertical)
+        self.resizeDocks([self._qu_dock], [right_w], Qt.Horizontal)
 
     def _open_new(self):
         """Show the file-picker dialog and reopen with new data."""
@@ -913,13 +1377,21 @@ class MainWindow(QMainWindow):
 
     def _restore_layout(self):
         """Bring all dock panels back to their default docked positions."""
+        for d in (self._ctrl_dock, self._qu_dock, self._fdf_dock,
+                  getattr(self, '_map_dock', None)):
+            if d is not None:
+                d.setFloating(False)
+                d.setVisible(True)
+
+        self.addDockWidget(Qt.LeftDockWidgetArea,  self._ctrl_dock)
         if self.has_data:
-            self._map_dock.setFloating(False)
-            self._map_dock.setVisible(True)
             self.addDockWidget(Qt.LeftDockWidgetArea, self._map_dock)
-        self._ctrl_dock.setFloating(False)
-        self._ctrl_dock.setVisible(True)
-        self.addDockWidget(Qt.RightDockWidgetArea, self._ctrl_dock)
+            self.splitDockWidget(self._ctrl_dock, self._map_dock, Qt.Vertical)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._qu_dock)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._fdf_dock)
+        self.splitDockWidget(self._qu_dock, self._fdf_dock, Qt.Vertical)
+
+        QTimer.singleShot(0, self._apply_default_sizes)
 
     def _build_controls(self):
         panel = QWidget()
@@ -968,40 +1440,242 @@ class MainWindow(QMainWindow):
 
         self._configure_params()
 
+        # ── FDF display options ───────────────────────────────────────────────
+        disp_grp = QGroupBox("FDF Display")
+        disp_layout = QVBoxLayout(disp_grp)
+        self._normalise_cb = QCheckBox("Normalise model to data peak")
+        self._normalise_cb.setChecked(True)
+        self._normalise_cb.setToolTip(
+            "ON  — model FDF scaled so its peak matches the data peak\n"
+            "       (model shown in Jy/beam/RMSF units;  RMSF at 0.5 × data peak)\n"
+            "OFF — model shown in fractional polarisation (0–1)\n"
+            "       (manual RMSF scale control appears below)"
+        )
+        self._normalise_cb.toggled.connect(self._on_normalise_toggled)
+        disp_layout.addWidget(self._normalise_cb)
+
+        # Manual model scale — visible only when normalise=OFF
+        self._model_scale_row = QWidget()
+        ms_hbox = QHBoxLayout(self._model_scale_row)
+        ms_hbox.setContentsMargins(0, 0, 0, 0)
+        ms_hbox.addWidget(QLabel("Model scale:"))
+        self._model_scale_spin = QDoubleSpinBox()
+        self._model_scale_spin.setRange(0, 1e12)
+        self._model_scale_spin.setDecimals(6)
+        self._model_scale_spin.setSingleStep(0.0001)
+        self._model_scale_spin.setValue(1.0)
+        self._model_scale_spin.setSuffix("")
+        self._model_scale_spin.setToolTip(
+            "Manually scale the model FDF amplitude to match the data.\n"
+            "RMSF is always shown normalised (peak = 1) on the right y-axis."
+        )
+        self._model_scale_spin.valueChanged.connect(self._schedule_update)
+        ms_hbox.addWidget(self._model_scale_spin)
+        self._model_scale_row.setVisible(False)
+        disp_layout.addWidget(self._model_scale_row)
+
+        vbox.addWidget(disp_grp)
+
         # Defer timer for batching rapid slider moves
         self._update_timer = QTimer(singleShot=True)
         self._update_timer.timeout.connect(self._update)
 
         return panel
 
-    def _build_plots(self):
-        splitter = QSplitter(Qt.Vertical)
-
-        # QU canvas (top)
-        qu_holder = QWidget()
-        qv = QVBoxLayout(qu_holder)
-        qv.setContentsMargins(0, 0, 0, 0)
+    def _build_qu_panel(self):
+        holder = QWidget()
+        v = QVBoxLayout(holder)
+        v.setContentsMargins(0, 0, 0, 0)
         self.qu_fig    = Figure(facecolor="#fafafa")
         self.qu_canvas = FigureCanvas(self.qu_fig)
         self.qu_ax     = self.qu_fig.add_subplot(111)
-        qv.addWidget(NavToolbar(self.qu_canvas, qu_holder))
-        qv.addWidget(self.qu_canvas)
-        splitter.addWidget(qu_holder)
+        v.addWidget(NavToolbar(self.qu_canvas, holder))
+        v.addWidget(self.qu_canvas)
+        return holder
 
-        # FDF canvas (bottom)
-        fdf_holder = QWidget()
-        fv = QVBoxLayout(fdf_holder)
-        fv.setContentsMargins(0, 0, 0, 0)
+    def _build_fdf_panel(self):
+        holder = QWidget()
+        v = QVBoxLayout(holder)
+        v.setContentsMargins(0, 0, 0, 0)
         self.fdf_fig    = Figure(facecolor="#fafafa")
         self.fdf_canvas = FigureCanvas(self.fdf_fig)
         self.fdf_ax     = self.fdf_fig.add_subplot(111)
-        fv.addWidget(NavToolbar(self.fdf_canvas, fdf_holder))
-        fv.addWidget(self.fdf_canvas)
-        splitter.addWidget(fdf_holder)
+        v.addWidget(NavToolbar(self.fdf_canvas, holder))
+        v.addWidget(self.fdf_canvas)
+        return holder
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        return splitter
+    def _build_map_panel(self):
+        """Wrap MapCanvas with cube-selector dropdown and channel slider."""
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(2, 2, 2, 2)
+        vbox.setSpacing(2)
+
+        # ── Controls row ──────────────────────────────────────────────────────
+        ctrl = QWidget()
+        hbox = QHBoxLayout(ctrl)
+        hbox.setContentsMargins(0, 0, 0, 0)
+
+        hbox.addWidget(QLabel("Display:"))
+        self._map_cube_cb = QComboBox()
+        self._map_cube_cb.addItem("FDF — peak map",   "fdf_peak")
+        self._map_cube_cb.addItem("FDF — φ slice",    "fdf_slice")
+        if self.has_qu:
+            self._map_cube_cb.addItem("Stokes I",     "stokes_i")
+            self._map_cube_cb.addItem("Stokes Q",     "stokes_q")
+            self._map_cube_cb.addItem("Stokes U",     "stokes_u")
+        hbox.addWidget(self._map_cube_cb)
+
+        hbox.addWidget(QLabel(" Ch:"))
+        self._map_ch_slider = QSlider(Qt.Horizontal)
+        self._map_ch_slider.setMinimum(0)
+        self._map_ch_slider.setMaximum(0)
+        self._map_ch_slider.setValue(0)
+        self._map_ch_slider.setEnabled(False)
+        self._map_ch_slider.setFixedWidth(90)
+        hbox.addWidget(self._map_ch_slider)
+
+        self._map_ch_lbl = QLabel("—")
+        self._map_ch_lbl.setFixedWidth(80)
+        hbox.addWidget(self._map_ch_lbl)
+        hbox.addStretch()
+
+        vbox.addWidget(ctrl)
+
+        # ── Second control row: axes / colormap / clipping ───────────────────
+        ctrl2 = QWidget()
+        hbox2 = QHBoxLayout(ctrl2)
+        hbox2.setContentsMargins(0, 0, 0, 0)
+
+        hbox2.addWidget(QLabel("Axes:"))
+        self._map_axes_cb = QComboBox()
+        self._map_axes_cb.addItem("Pixel",     "pixel")
+        self._map_axes_cb.addItem("WCS (deg)", "wcs_deg")
+        self._map_axes_cb.addItem("WCS (hms)", "wcs_hms")
+        if self.wcs2d is None:
+            self._map_axes_cb.setEnabled(False)
+            self._map_axes_cb.setToolTip("No WCS in FDF header")
+        hbox2.addWidget(self._map_axes_cb)
+
+        hbox2.addWidget(QLabel("Cmap:"))
+        self._map_cmap_cb = QComboBox()
+        for cm in ("inferno", "viridis", "plasma", "magma",
+                   "cividis", "gray", "hot", "RdBu_r"):
+            self._map_cmap_cb.addItem(cm)
+        hbox2.addWidget(self._map_cmap_cb)
+
+        hbox2.addWidget(QLabel("Clip:"))
+        self._map_clip_cb = QComboBox()
+        for pct in (99.5, 99.0, 95.0, 99.9, 99.95, 99.99, 100.0):
+            self._map_clip_cb.addItem(f"{pct}%", pct)
+        hbox2.addWidget(self._map_clip_cb)
+        hbox2.addStretch()
+
+        vbox.addWidget(ctrl2)
+        vbox.addWidget(self.map_canvas, stretch=1)
+
+        self._map_cube_cb.currentIndexChanged.connect(self._on_map_cube_changed)
+        self._map_ch_slider.valueChanged.connect(self._on_map_channel_changed)
+        self._map_axes_cb.currentIndexChanged.connect(self._apply_axes_format)
+        self._map_cmap_cb.currentIndexChanged.connect(self._on_cmap_changed)
+        self._map_clip_cb.currentIndexChanged.connect(self._update_map_image)
+
+        return container
+
+    def _on_cmap_changed(self, _idx):
+        self.map_canvas.ax.images[0].set_cmap(self._map_cmap_cb.currentText())
+        self.map_canvas.draw_idle()
+
+    def _apply_axes_format(self, _idx=None):
+        """Switch the map x/y tick labels between pixel and WCS coordinates."""
+        from matplotlib.ticker import FuncFormatter, ScalarFormatter
+        ax   = self.map_canvas.ax
+        mode = self._map_axes_cb.currentData()
+        ms   = self.map_step
+        if mode == "pixel" or self.wcs2d is None:
+            ax.xaxis.set_major_formatter(ScalarFormatter())
+            ax.yaxis.set_major_formatter(ScalarFormatter())
+            ax.set_xlabel("RA pixel (downsampled)",  fontsize=7, color="white")
+            ax.set_ylabel("Dec pixel (downsampled)", fontsize=7, color="white")
+        else:
+            wcs = self.wcs2d
+            if mode == "wcs_deg":
+                def fx(x, p):
+                    ra, _ = wcs.all_pix2world(x * ms, 0, 0)
+                    return f"{float(ra):.4f}°"
+                def fy(y, p):
+                    _, dec = wcs.all_pix2world(0, y * ms, 0)
+                    return f"{float(dec):+.4f}°"
+            else:  # wcs_hms
+                from astropy.coordinates import Angle
+                import astropy.units as u
+                def fx(x, p):
+                    ra, _ = wcs.all_pix2world(x * ms, 0, 0)
+                    return Angle(float(ra), unit=u.deg).to_string(
+                        unit=u.hour, sep=":", precision=1, pad=True)
+                def fy(y, p):
+                    _, dec = wcs.all_pix2world(0, y * ms, 0)
+                    return Angle(float(dec), unit=u.deg).to_string(
+                        sep=":", precision=1, alwayssign=True, pad=True)
+            ax.xaxis.set_major_formatter(FuncFormatter(fx))
+            ax.yaxis.set_major_formatter(FuncFormatter(fy))
+            ax.set_xlabel("RA",  fontsize=7, color="white")
+            ax.set_ylabel("Dec", fontsize=7, color="white")
+        self.map_canvas.draw_idle()
+
+    def _on_map_cube_changed(self, _idx):
+        key = self._map_cube_cb.currentData()
+        if key == "fdf_peak":
+            self._map_ch_slider.setEnabled(False)
+            self._map_ch_lbl.setText("—")
+        elif key == "fdf_slice":
+            n = self.fdf_data.shape[0]
+            self._map_ch_slider.setMaximum(n - 1)
+            self._map_ch_slider.setValue(n // 2)
+            self._map_ch_slider.setEnabled(True)
+        else:  # Stokes
+            n = self.i_data.shape[0]
+            self._map_ch_slider.setMaximum(n - 1)
+            self._map_ch_slider.setValue(0)
+            self._map_ch_slider.setEnabled(True)
+        self._update_map_image()
+
+    def _on_map_channel_changed(self, ch):
+        key = self._map_cube_cb.currentData()
+        if key == "fdf_slice":
+            self._map_ch_lbl.setText(f"{self.phi_data[ch]:.0f} r/m²")
+        else:
+            self._map_ch_lbl.setText(f"{self.freqs[ch]/1e9:.3f} GHz")
+        self._update_map_image()
+
+    def _update_map_image(self, *_):
+        key = self._map_cube_cb.currentData()
+        ch  = self._map_ch_slider.value()
+        ms  = self.map_step
+        if key == "fdf_peak":
+            img = self.fdf_data[:, ::ms, ::ms].max(axis=0)
+        elif key == "fdf_slice":
+            img = np.abs(self.fdf_data[ch, ::ms, ::ms])
+        elif key == "stokes_i":
+            img = self.i_data[ch, ::ms, ::ms]
+        elif key == "stokes_q":
+            img = self.q_data[ch, ::ms, ::ms]
+        else:
+            img = self.u_data[ch, ::ms, ::ms]
+
+        pct_hi = float(self._map_clip_cb.currentData())
+        # Symmetric "lower tail" — drop the same fraction off the bottom
+        pct_lo = max(0.0, 100.0 - pct_hi)
+        vlo = float(np.nanpercentile(img, pct_lo))
+        vhi = float(np.nanpercentile(img, pct_hi))
+        if vhi <= vlo:
+            vhi = vlo + 1e-12
+
+        im = self.map_canvas.ax.images[0]
+        im.set_data(img)
+        im.set_clim(vlo, vhi)
+        im.set_cmap(self._map_cmap_cb.currentText())
+        self.map_canvas.draw_idle()
 
     # ── Parameter widget management ───────────────────────────────────────────
 
@@ -1031,14 +1705,53 @@ class MainWindow(QMainWindow):
         self._configure_params()
         self._update()
 
-    def _schedule_update(self):
-        self._update_timer.start(40)   # 40 ms debounce — batches rapid slider drags
+    def _on_normalise_toggled(self, checked):
+        self._model_scale_row.setVisible(not checked)
+        if not checked and self.real_fdf is not None:
+            self._model_scale_spin.setValue(float(self.real_fdf.max()) /
+                                            max(float(self._last_amax), 1e-30))
+        self._schedule_update()
 
-    def _on_aperture(self, mask, cx, cy, r):
+    def _on_aperture_cleared(self):
+        self.real_fdf   = None
+        self.real_q     = None
+        self.real_u     = None
+        self.real_label = None
+        self._update()
+
+    def _schedule_update(self):
+        self._update_timer.start(40)
+
+    def _on_aperture(self, mask, cx, cy, a, b):
         n_pix = int(mask.sum())
         ds = self.fdf_data[:, ::self.map_step, ::self.map_step]
         self.real_fdf   = ds[:, mask].sum(axis=1).astype(np.float64)
-        self.real_label = f"aperture  r={r:.1f} ds-px  ({n_pix} px)"
+        bi = self.beam_info
+        if bi and bi.get("pix_scale"):
+            ps    = bi["pix_scale"] * self.map_step
+            a_arc = a * ps
+            b_arc = b * ps
+            bmaj  = bi.get("bmaj", 0)
+            per_ch = bi.get("per_channel")
+            beam_note = " [per-ch beams]" if per_ch is not None else ""
+            if bmaj > 0:
+                self.real_label = (f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\""
+                                   f" ({a_arc/bmaj:.2f} × {b_arc/bmaj:.2f} beams{beam_note})")
+                status_r = (f"{a_arc:.1f}\" × {b_arc:.1f}\""
+                            f" ({a_arc/bmaj:.2f} × {b_arc/bmaj:.2f} beams{beam_note})")
+            else:
+                self.real_label = f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\"{beam_note}"
+                status_r = f"{a_arc:.1f}\" × {b_arc:.1f}\"{beam_note}"
+        else:
+            self.real_label = f"aperture  {a:.1f} × {b:.1f} ds-px  ({n_pix} px)"
+            status_r = f"{a:.1f} × {b:.1f} ds-px"
+
+        # Pre-fill model scale spinbox when data arrives (used when normalise=OFF)
+        if not self._normalise_cb.isChecked() and hasattr(self, '_last_amax'):
+            self._model_scale_spin.blockSignals(True)
+            self._model_scale_spin.setValue(
+                float(self.real_fdf.max()) / max(float(self._last_amax), 1e-30))
+            self._model_scale_spin.blockSignals(False)
 
         if self.has_qu:
             I_sum = self.i_data[:, ::self.map_step, ::self.map_step][:, mask].sum(axis=1).astype(np.float64)
@@ -1048,8 +1761,25 @@ class MainWindow(QMainWindow):
             self.real_q = np.where(safe, Q_sum / I_sum, np.nan)
             self.real_u = np.where(safe, U_sum / I_sum, np.nan)
 
+        # ── Sky coordinates of aperture centre via WCS ────────────────────────
+        coord_str = ""
+        if self.wcs2d is not None:
+            try:
+                native_x = float(cx) * self.map_step
+                native_y = float(cy) * self.map_step
+                ra_deg, dec_deg = self.wcs2d.all_pix2world(native_x, native_y, 0)
+                # Format RA as hh:mm:ss, Dec as ±dd:mm:ss
+                from astropy.coordinates import SkyCoord
+                import astropy.units as u
+                sc  = SkyCoord(ra=float(ra_deg)*u.deg, dec=float(dec_deg)*u.deg)
+                ra_hms  = sc.ra.to_string(unit=u.hour, sep=":", precision=1, pad=True)
+                dec_dms = sc.dec.to_string(sep=":", precision=1, alwayssign=True, pad=True)
+                coord_str = f"  |  centre RA={ra_hms}  Dec={dec_dms}"
+            except Exception:
+                pass
+
         self.statusBar().showMessage(
-            f"Aperture: r={r:.1f} ds-px, {n_pix} pixels summed  |  model: {self.model}")
+            f"Aperture: {status_r}, {n_pix} pixels{coord_str}  |  model: {self.model}")
         self._update()
 
     # ── Plot update ───────────────────────────────────────────────────────────
@@ -1088,29 +1818,68 @@ class MainWindow(QMainWindow):
         self.qu_canvas.draw_idle()
 
     def _draw_fdf(self, amp, amax):
-        ax = self.fdf_ax
+        self._last_amax = amax   # cache for _on_normalise_toggled
+        ax        = self.fdf_ax
+        normalise = self._normalise_cb.isChecked()
+        # Remove any stale twin axes from prior calls (prevents RMSF shade stacking)
+        for axis in list(self.fdf_fig.axes):
+            if axis is not ax:
+                axis.remove()
         ax.cla()
         ax.set_facecolor("#fdfdfd")
 
-        ax.fill_between(self.phi, self.rmsf * amax, alpha=0.07, color="gray")
-        ax.plot(self.phi, self.rmsf * amax, color="gray", lw=0.7,
-                ls="--", alpha=0.4, label="RMSF (scaled)")
+        # ── Model amplitude: scale to data peak (ON) or manual spinbox (OFF) ──
+        has_data = self.real_fdf is not None and self.real_fdf.max() > 0
+        real_max = float(self.real_fdf.max()) if has_data else None
 
+        if has_data and normalise and amax > 0:
+            model_scale = real_max / amax
+            model_lbl   = "|FDF| model  (scaled to data peak)"
+        elif not normalise:
+            model_scale = self._model_scale_spin.value()
+            model_lbl   = f"|FDF| model  (×{model_scale:.3g})"
+        else:
+            model_scale = 1.0
+            model_lbl   = "|FDF| model"
+
+        model_amp  = amp * model_scale
+        model_peak = amax * model_scale
+
+        # ── Primary y-axis limits ─────────────────────────────────────────────
+        ymax = max(model_peak, real_max) if has_data else model_peak
+        if ymax <= 0:
+            ymax = 1.0
+
+        # ── Secondary (right) y-axis for normalised RMSF ─────────────────────
+        # RMSF always plotted on ax2 with its natural 0–1 normalisation.
+        # We set ax2 ylim so RMSF peak (1.0) appears at 50 % of plot height.
+        ax2 = ax.twinx()
+        ax2.set_ylim(0, 1.25)   # RMSF peak=1.0 at RM=0 with 0.25 headroom
+        ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color="gray")
+        ax2.tick_params(axis='y', labelcolor="gray", labelsize=6)
+        ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color="gray", zorder=1)
+        ax2.plot(self.phi, self.rmsf, color="gray", lw=0.8,
+                 ls="--", alpha=0.55, label="RMSF (norm.)", zorder=1)
+        # Draw RMSF behind the main data lines
+        ax2.set_zorder(ax.get_zorder() - 1)
+        ax.patch.set_visible(False)   # make ax background transparent so ax2 fill shows
+
+        # ── RM reference lines ────────────────────────────────────────────────
         sub = "₁₂₃"
         for j, rm in enumerate(self._rm_vals()):
             ax.axvline(rm, color=RM_COLOURS[j % 3], lw=0.9, ls=":", alpha=0.65,
                        label=f"RM{sub[j]} input = {rm:+.0f}")
 
-        ax.plot(self.phi, amp, color="steelblue", lw=1.8, label="|FDF| model")
+        # ── Model FDF ─────────────────────────────────────────────────────────
+        ax.plot(self.phi, model_amp, color="steelblue", lw=1.8, label=model_lbl)
 
-        # Peak detection on model FDF
         dphi    = (PHI_MAX - PHI_MIN) / (N_PHI - 1)
         min_sep = max(1, int(15.0 / dphi))
-        if amax > 0:
-            peaks, _ = find_peaks(amp, height=0.05*amax,
-                                  prominence=0.20*amax, distance=min_sep)
+        if model_peak > 0:
+            peaks, _ = find_peaks(model_amp, height=0.05*model_peak,
+                                  prominence=0.20*model_peak, distance=min_sep)
             for pk in peaks:
-                phi_pk, a_pk = self.phi[pk], amp[pk]
+                phi_pk, a_pk = self.phi[pk], model_amp[pk]
                 ax.axvline(phi_pk, color="steelblue", lw=0.9, ls="--", alpha=0.7)
                 ax.scatter([phi_pk], [a_pk], color="steelblue", s=40, zorder=6,
                            edgecolors="navy", lw=0.5)
@@ -1120,37 +1889,45 @@ class MainWindow(QMainWindow):
                             bbox=dict(boxstyle="round,pad=0.2", fc="white",
                                       ec="steelblue", alpha=0.85, lw=0.5))
 
-        # Real FDF overlay
-        if self.real_fdf is not None:
+        # ── Real FDF overlay ──────────────────────────────────────────────────
+        if has_data:
             real_amp = self.real_fdf
-            real_max = real_amp.max()
-            if real_max > 0:
-                real_norm = real_amp / real_max * amax
-                ax.plot(self.phi_data, real_norm, color="darkorange", lw=1.5,
-                        alpha=0.85, label=f"|FDF| data  {self.real_label}")
-                dphi_r = abs(self.phi_data[1] - self.phi_data[0])
-                sep_r  = max(1, int(15.0 / dphi_r))
-                rp, _  = find_peaks(real_amp, height=0.05*real_max,
-                                    prominence=0.10*real_max, distance=sep_r)
-                for pk in rp:
-                    phi_pk = self.phi_data[pk]
-                    a_pk   = real_norm[pk]
-                    ax.axvline(phi_pk, color="darkorange", lw=0.9, ls="-.", alpha=0.7)
-                    ax.scatter([phi_pk], [a_pk], color="darkorange", s=35, zorder=6,
-                               edgecolors="saddlebrown", lw=0.5)
-                    ax.annotate(f"φ={phi_pk:+.0f}", xy=(phi_pk, a_pk),
-                                xytext=(-4, 8), textcoords="offset points",
-                                fontsize=7, color="darkorange",
-                                bbox=dict(boxstyle="round,pad=0.2", fc="white",
-                                          ec="darkorange", alpha=0.85, lw=0.5))
+            data_lbl = "|FDF| data (Jy/RMSF)"
+            ax.plot(self.phi_data, real_amp, color="darkorange", lw=1.5,
+                    alpha=0.85, label=data_lbl)
 
+            dphi_r = abs(self.phi_data[1] - self.phi_data[0])
+            sep_r  = max(1, int(15.0 / dphi_r))
+            rp, _  = find_peaks(real_amp, height=0.05*real_max,
+                                 prominence=0.10*real_max, distance=sep_r)
+            for pk in rp:
+                phi_pk = self.phi_data[pk]
+                a_pk   = real_amp[pk]
+                ax.axvline(phi_pk, color="darkorange", lw=0.9, ls="-.", alpha=0.7)
+                ax.scatter([phi_pk], [a_pk], color="darkorange", s=35, zorder=6,
+                           edgecolors="saddlebrown", lw=0.5)
+                ax.annotate(f"φ={phi_pk:+.0f}", xy=(phi_pk, a_pk),
+                            xytext=(-4, 8), textcoords="offset points",
+                            fontsize=7, color="darkorange",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                      ec="darkorange", alpha=0.85, lw=0.5))
+
+        norm_note = ("model scaled to data peak" if (has_data and normalise)
+                     else f"model ×{model_scale:.3g}" if not normalise
+                     else "model: fractional pol.")
         ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
-        ax.set_ylabel("|FDF(φ)|  (model: fractional; data: normalised)")
+        ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/beam/RMSF)")
         ax.set_title(f"FDF Comparison  |  model {self.model}")
-        ax.legend(fontsize=7.5, loc="upper right", framealpha=0.85)
+
+        # Combined legend from both axes
+        lines1, labs1 = ax.get_legend_handles_labels()
+        lines2, labs2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labs1 + labs2,
+                  fontsize=7.5, loc="upper right", framealpha=0.85)
+
         ax.grid(True, alpha=0.2)
         ax.set_xlim(PHI_MIN, PHI_MAX)
-        ax.set_ylim(0, 1.20 * amax)
+        ax.set_ylim(0, 1.20 * ymax)
         self.fdf_fig.tight_layout()
         self.fdf_canvas.draw_idle()
 
@@ -1159,8 +1936,8 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("QU Viewer")
-    app.setOrganizationName("QUViewer")
+    app.setApplicationName("Faraday Explorer")
+    app.setOrganizationName("AmaniAstro")
     app.setStyle("Fusion")
 
     # ── Opening splash ───────────────────────────────────────────────────────
@@ -1180,20 +1957,26 @@ def main():
         else:
             fdf_path, i_path, q_path, u_path, freq_file = sys.argv[1:6]
         map_step = MAP_STEP
-        freqs = np.loadtxt(freq_file)
+        freqs    = np.loadtxt(freq_file)
+        paths    = dict(fdf=fdf_path, i=i_path, q=q_path, u=u_path)
+        _, beam_info = validate_inputs(paths)
         print(f"CLI mode — {len(freqs)} frequencies from {freq_file}")
     else:
-        dlg = LaunchDialog()
-        if dlg.exec_() != QDialog.Accepted:
-            sys.exit(0)
-        p                      = dlg.paths
+        while True:
+            dlg = LaunchDialog()
+            if dlg.exec_() != QDialog.Accepted:
+                sys.exit(0)
+            p        = dlg.paths
+            ok, beam_info = validate_inputs(p)
+            if ok:
+                break
         fdf_path, freq_file    = p["fdf"], p["freq"]
         i_path, q_path, u_path = p["i"],   p["q"],   p["u"]
         map_step               = p["map_step"]
         freqs = np.loadtxt(freq_file)
         print(f"GUI mode — {len(freqs)} frequencies from {freq_file}")
 
-    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step)
+    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info)
     win.show()
     sys.exit(app.exec_())
 

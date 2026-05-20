@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+title: "Faraday Explorer: an interactive Faraday-depth polarisation model viewer for radio astronomy"
+message: "If you use this software, please cite it using the metadata below, and also cite RM-Tools (Purcell et al. 2020) whose polarisation models are implemented here."
+type: software
+authors:
+  - given-names: "S. Amani"
+    family-names: "Njoroge"
+    orcid: "https://orcid.org/0000-0001-9756-7350"
+    affiliation: "University of Cape Town, Department of Astronomy"
+repository-code: "https://github.com/NJRSAM003/FaradayExplorer"
+license: MIT
+keywords:
+  - radio-astronomy
+  - polarisation
+  - Faraday-rotation
+  - RM-synthesis
+  - QU-fitting
+  - MeerKAT
+preferred-citation:
+  type: software
+  title: "Faraday Explorer: an interactive Faraday-depth polarisation model viewer for radio astronomy"
+  authors:
+    - given-names: "S. Amani"
+      family-names: "Njoroge"
+      orcid: "https://orcid.org/0000-0001-9756-7350"
+      affiliation: "University of Cape Town, Department of Astronomy"
+  year: 2026
+  url: "https://github.com/NJRSAM003/FaradayExplorer"
+references:
+  - type: software
+    title: "RM-Tools: Rotation measure (RM) synthesis and Stokes QU-fitting"
+    authors:
+      - family-names: "Purcell"
+        given-names: "C. R."
+      - family-names: "Van Eck"
+        given-names: "C. L."
+      - family-names: "West"
+        given-names: "J."
+      - family-names: "Sun"
+        given-names: "X. H."
+      - family-names: "Gaensler"
+        given-names: "B. M."
+    year: 2020
+    url: "https://github.com/CIRADA-Tools/RM-Tools"
+    identifiers:
+      - type: other
+        value: "ascl:2005.003"
+        description: "Astrophysics Source Code Library record"
