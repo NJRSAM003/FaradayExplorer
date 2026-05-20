@@ -141,7 +141,8 @@ To launch the viewer on the demo data:
    dummy_cubes/Stokes_I_demo.fits \
    dummy_cubes/Stokes_Q_demo.fits \
    dummy_cubes/Stokes_U_demo.fits \
-   dummy_cubes/freqFile_demo.dat
+   dummy_cubes/freqFile_demo.dat \
+   --ds 100
 ```
 
 Or just start the app with no arguments and browse to those files in the
