@@ -1951,6 +1951,51 @@ def main():
     app.setOrganizationName("AmaniAstro")
     app.setStyle("Fusion")
 
+    # ── Parse optional CLI flags (consumed before the positional args) ────────
+    HELP = (
+        "Faraday Explorer — interactive Faraday-depth polarisation viewer\n"
+        "\n"
+        "Usage:\n"
+        "  faraday_explorer.py                                          (GUI: file picker)\n"
+        "  faraday_explorer.py FDF.fits freqFile.dat                   (FDF-only CLI)\n"
+        "  faraday_explorer.py FDF.fits I.fits Q.fits U.fits freq.dat  (full CLI)\n"
+        "\n"
+        "Optional flags:\n"
+        "  --ds <pct>    Spatial downsampling: percent of resolution to keep (1–100).\n"
+        "                Default = 4 (every 25th pixel). Use 100 for full resolution.\n"
+        "  -h, --help    Show this help and exit.\n"
+        "\n"
+        "Launcher-only flags (handled by launch_faraday_explorer.sh):\n"
+        "  --env <name>  Use a non-default conda environment.\n"
+    )
+    cli_ds_pct = 4   # default: 4% (matches the GUI default → MAP_STEP=25)
+    args = sys.argv[1:]
+    cleaned = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-h", "--help"):
+            print(HELP)
+            sys.exit(0)
+        if a in ("--ds", "--ds-pct"):
+            if i + 1 >= len(args):
+                print("ERROR: --ds requires a value between 1 and 100", file=sys.stderr)
+                sys.exit(1)
+            try:
+                val = float(args[i + 1])
+            except ValueError:
+                print(f"ERROR: --ds value '{args[i+1]}' is not a number", file=sys.stderr)
+                sys.exit(1)
+            if not (1 <= val <= 100):
+                print(f"ERROR: --ds must be between 1 and 100 (got {val})", file=sys.stderr)
+                sys.exit(1)
+            cli_ds_pct = int(round(val))
+            i += 2
+        else:
+            cleaned.append(a)
+            i += 1
+    sys.argv = [sys.argv[0]] + cleaned
+
     # ── Opening splash — always shown, regardless of CLI/GUI mode ─────────────
     splash = VideoSplash()
     loop   = QEventLoop()
@@ -1966,11 +2011,12 @@ def main():
             i_path = q_path = u_path = None
         else:
             fdf_path, i_path, q_path, u_path, freq_file = sys.argv[1:6]
-        map_step = MAP_STEP
+        map_step = max(1, round(100 / cli_ds_pct))
         freqs    = np.loadtxt(freq_file)
         paths    = dict(fdf=fdf_path, i=i_path, q=q_path, u=u_path)
         _, beam_info = validate_inputs(paths)
-        print(f"CLI mode — {len(freqs)} frequencies from {freq_file}")
+        print(f"CLI mode — {len(freqs)} frequencies from {freq_file}, "
+              f"downsample = {cli_ds_pct}% (map_step={map_step})")
     else:
         while True:
             dlg = LaunchDialog()

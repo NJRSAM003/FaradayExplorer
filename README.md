@@ -93,10 +93,21 @@ After it's done, you can delete the cloned repository folder.
 
 ```bash
 # FDF-only mode
-conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits freqFile.dat
+./launch_faraday_explorer.sh FDF.fits freqFile.dat
 
 # Full mode (FDF + Stokes I, Q, U)
-conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
+./launch_faraday_explorer.sh FDF.fits I.fits Q.fits U.fits freqFile.dat
+```
+
+**Optional flags:**
+
+- `--ds <pct>` — spatial downsampling, % of resolution to keep (1–100). Default `4` (every 25th pixel). Use `--ds 100` for full resolution.
+- `--env <name>` — use a non-default conda env (must come *first*).
+- `-h`, `--help` — print usage and exit.
+
+```bash
+./launch_faraday_explorer.sh --help
+./launch_faraday_explorer.sh --ds 100 dummy_cubes/FDF_demo.fits dummy_cubes/freqFile_demo.dat
 ```
 
 ### Trying it without your own data
