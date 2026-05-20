@@ -71,14 +71,44 @@ astronomy work):
 bash install.sh my_env_name
 ```
 
+### Uninstalling
+
+To fully remove Faraday Explorer from your system, run:
+
+```bash
+bash uninstall.sh
+```
+
+The uninstaller is interactive (asks for confirmation) and reverses every
+step the installer made:
+
+1. Deletes the desktop launcher entry (`~/.local/share/applications/faraday_explorer.desktop`)
+2. Deletes the installed app icon (`~/.local/share/icons/hicolor/512x512/apps/faraday_explorer.png`)
+3. Removes the Qt settings cache (`~/.config/AmaniAstro/`) that remembers
+   your previously-selected file paths
+4. Removes the `faraday_explorer` conda environment
+
+After it's done, you can delete the cloned repository folder yourself with
+`rm -rf` if you no longer need it. If you used a custom env name with the
+installer, pass the same name here:
+
+```bash
+bash uninstall.sh my_env_name
+```
+
 ---
 
 ## Quick Start
 
-**Graphical launch** — search for *Faraday Explorer* in your application menu,
-or double-click the desktop shortcut if you created one.
+> ### **Recommended: open the app from your application menu**
+> After running `install.sh`, **search for *Faraday Explorer*** in your
+> desktop's application launcher (the same menu where you find Firefox, your
+> file manager, etc.) and **click the icon**. That's it — the app handles
+> everything else (splash, conda environment activation, file picker).
+> You can also **double-click a `Faraday Explorer` shortcut on your desktop**
+> if you've created one.
 
-**Terminal launch** — from inside the repo:
+**Alternative — terminal launch** (useful for debugging or remote work):
 
 ```bash
 ./launch_faraday_explorer.sh
@@ -104,11 +134,20 @@ conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits
 
 ### Trying it without your own data
 
-The repo ships with a small set of demo cubes under `dummy_cubes/` — a
-2 arcmin × 2 arcmin cutout from a real MeerKAT L-band observation, centred at
-RA = 02:46:20.5  Dec = −29:35:00.5. The Stokes I/Q/U cubes carry a CASA
-per-channel BEAMS extension, so you can exercise the full beam-handling
-workflow immediately:
+The repo **ships with a small set of demo cubes under `dummy_cubes/`** — an
+80 × 80 pixel (2 arcmin × 2 arcmin) cutout from a real MeerKAT L-band
+observation of NGC 1097, centred at RA = 02:46:20.5  Dec = −29:35:00.5.
+
+The cubes preserve **every metadata feature** of the original data, so the
+demo session exercises the full workflow exactly as a real one would:
+
+- The Stokes I/Q/U cubes carry the original CASA per-channel **BEAMS**
+  binary-table extension (9 rows; BMAJ range 6.7" – 12.1"), so launching the
+  demo triggers the *"CASA Per-Channel Beam Tables Found"* popup
+- WCS keywords (`CRVAL`, `CDELT`, `CRPIX`, `CTYPE` = `RA---SIN`/`DEC--SIN`)
+  are correctly updated for the cropped region, so the WCS axis toggle and
+  on-screen sky-coordinate readout work immediately
+- The Faraday-depth axis of `FDF_demo.fits` is untouched (95 φ-slices)
 
 | File | Content |
 |---|---|
@@ -117,6 +156,8 @@ workflow immediately:
 | `dummy_cubes/Stokes_Q_demo.fits` | Stokes Q cube (9 freq. channels + BEAMS) |
 | `dummy_cubes/Stokes_U_demo.fits` | Stokes U cube (9 freq. channels + BEAMS) |
 | `dummy_cubes/freqFile_demo.dat` | The nine SPW centre frequencies in Hz |
+
+Total size: ≈ 3.6 MB.
 
 To launch the viewer on the demo data:
 
