@@ -87,22 +87,9 @@ After it's done, you can delete the cloned repository folder.
 > everything else (splash, conda environment activation, file picker).
 > You can also **double-click a `Faraday Explorer` shortcut on your desktop**
 > if you've created one.
+>On startup the file-picker dialog will appear if you clicked on the app (otherwsie **command-line launch** will skip that part).
 
-**Alternative — terminal launch** (useful for debugging or remote work):
-
-```bash
-./launch_faraday_explorer.sh
-```
-
-On startup the animated splash screen plays:
-
-<p align="center">
-  <img src="images/splash_screen.png" alt="Splash screen" width="500">
-</p>
-
-followed by the file-picker dialog.
-
-**Command-line launch** (the splash still plays — only the file picker dialog is skipped):
+**Alternative — terminal launch**:
 
 ```bash
 # FDF-only mode
@@ -123,10 +110,7 @@ The cubes preserve **every metadata feature** of the original data:
 - The Stokes I/Q/U cubes carry the original CASA per-channel **BEAMS**
   binary-table extension (9 rows; BMAJ range 6.7" – 12.1"), so launching the
   demo triggers the *"CASA Per-Channel Beam Tables Found"* popup
-- WCS keywords (`CRVAL`, `CDELT`, `CRPIX`, `CTYPE` = `RA---SIN`/`DEC--SIN`)
-  are correctly updated for the cropped region, so the WCS axis toggle and
-  on-screen sky-coordinate readout work immediately
-- The Faraday-depth axis of `FDF_demo.fits` is untouched (95 φ-slices)
+- Faraday-depth axis of `FDF_demo.fits` is preserved at 95 φ-slices
 
 | File | Content |
 |---|---|
