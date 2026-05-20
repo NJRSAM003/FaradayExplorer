@@ -145,8 +145,7 @@ To launch the viewer on the demo data:
    --ds 100
 ```
 
-Or just start the app with no arguments and browse to those files in the
-launch dialog.
+Or just start the app with no arguments and browse to those files in the launch dialog (set downsampling to 100%)
 
 ---
 
