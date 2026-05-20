@@ -54,18 +54,9 @@ cd FaradayExplorer
 bash install.sh
 ```
 
-`install.sh` performs four tasks:
+`install.sh` will create (or update) a conda environment named `faraday_explorer` from `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg) and writes a desktop entry to `~/.local/share/applications/` so *Faraday Explorer* appears in your application menu. It also marks the launcher script as executable for terminal usage.
 
-1. Creates (or updates) a conda environment named `faraday_explorer` from
-   `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg).
-2. Copies the app icon to `~/.local/share/icons/`.
-3. Writes a desktop entry to `~/.local/share/applications/` so *Faraday
-   Explorer* appears in your application menu with the correct icon and a
-   working `Exec=` path.
-4. Marks the launcher script executable.
-
-To use a custom environment name (useful if you already have one for radio
-astronomy work):
+You can also specify the environment name if needbe: 
 
 ```bash
 bash install.sh my_env_name
@@ -78,25 +69,15 @@ To fully remove Faraday Explorer from your system, run:
 ```bash
 bash uninstall.sh
 ```
-
-The uninstaller is interactive (asks for confirmation) and reverses every
-step the installer made:
-
-1. Deletes the desktop launcher entry (`~/.local/share/applications/faraday_explorer.desktop`)
-2. Deletes the installed app icon (`~/.local/share/icons/hicolor/512x512/apps/faraday_explorer.png`)
-3. Removes the Qt settings cache (`~/.config/AmaniAstro/`) that remembers
-   your previously-selected file paths
-4. Removes the `faraday_explorer` conda environment
-
-After it's done, you can delete the cloned repository folder yourself with
-`rm -rf` if you no longer need it. If you used a custom env name with the
-installer, pass the same name here:
+or if you custom named the environment:
 
 ```bash
 bash uninstall.sh my_env_name
 ```
 
----
+The uninstaller is interactive (asks for confirmation) and reverses every step the installer made.
+
+After it's done, you can delete the cloned repository folder.
 
 ## Quick Start
 
