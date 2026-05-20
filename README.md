@@ -83,8 +83,7 @@ After it's done, you can delete the cloned repository folder.
 
 ### **Recommended: open the app from your application menu**
 > After running `install.sh`, **search for *Faraday Explorer*** in your
-> desktop's application launcher (the same menu where you find Firefox, your
-> file manager, etc.) and **click the icon**. That's it — the app handles
+> desktop's application launcher (the same menu where you find your usual other apps) and **click the icon**. That's it — the app handles
 > everything else (splash, conda environment activation, file picker).
 > You can also **double-click a `Faraday Explorer` shortcut on your desktop**
 > if you've created one.
