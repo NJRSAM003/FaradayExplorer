@@ -102,6 +102,36 @@ conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits freqFile.dat
 conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
 ```
 
+### Trying it without your own data
+
+The repo ships with a small set of demo cubes under `dummy_cubes/` — a
+2 arcmin × 2 arcmin cutout from a real MeerKAT L-band observation, centred at
+RA = 02:46:20.5  Dec = −29:35:00.5. The Stokes I/Q/U cubes carry a CASA
+per-channel BEAMS extension, so you can exercise the full beam-handling
+workflow immediately:
+
+| File | Content |
+|---|---|
+| `dummy_cubes/FDF_demo.fits` | Faraday Dispersion Function cube (95 φ-channels) |
+| `dummy_cubes/Stokes_I_demo.fits` | Stokes I cube (9 freq. channels + BEAMS) |
+| `dummy_cubes/Stokes_Q_demo.fits` | Stokes Q cube (9 freq. channels + BEAMS) |
+| `dummy_cubes/Stokes_U_demo.fits` | Stokes U cube (9 freq. channels + BEAMS) |
+| `dummy_cubes/freqFile_demo.dat` | The nine SPW centre frequencies in Hz |
+
+To launch the viewer on the demo data:
+
+```bash
+./launch_faraday_explorer.sh \
+   dummy_cubes/FDF_demo.fits \
+   dummy_cubes/Stokes_I_demo.fits \
+   dummy_cubes/Stokes_Q_demo.fits \
+   dummy_cubes/Stokes_U_demo.fits \
+   dummy_cubes/freqFile_demo.dat
+```
+
+Or just start the app with no arguments and browse to those files in the
+launch dialog.
+
 ---
 
 ## The Launch Workflow

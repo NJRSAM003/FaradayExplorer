@@ -3,6 +3,8 @@
 *.FITS
 *.ms
 *.uvfits
+# …except small bundled demo cubes
+!dummy_cubes/*.fits
 
 # Video files — splash videos are intentionally kept (app branding)
 *.mp4
