@@ -1,7 +1,8 @@
-# Faraday Explorer
 
-<p align="center">
+
+<p align="left">
   <img src="FEIcon.png" alt="Faraday Explorer icon" width="120">
+  # Faraday Explorer
 </p>
 
 An interactive desktop application for exploring radio-polarisation models and
