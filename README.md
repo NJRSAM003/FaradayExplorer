@@ -56,7 +56,7 @@ bash install.sh
 
 `install.sh` will create (or update) a conda environment named `faraday_explorer` from `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg) and writes a desktop entry to `~/.local/share/applications/` so *Faraday Explorer* appears in your application menu. It also marks the launcher script as executable for terminal usage.
 
-You can also specify the environment name if needbe: 
+You can also specify the environment name if need be: 
 
 ```bash
 bash install.sh my_env_name
