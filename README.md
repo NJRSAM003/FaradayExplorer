@@ -535,8 +535,7 @@ makes this explicit.
 **9-channel RMSF sidelobes.** With only nine SPW centres, the RMSF main-lobe
 sidelobe sits at ≈ 58 % (compared to ≈ 20 % for a full 161-channel L-band
 cube). A single FDF peak can produce sidelobe artefacts that look like
-secondary components. Always check the RMSF response on the right-hand y-axis
-before interpreting multi-peaked structures.
+secondary components. Always check the RMSF response (shaded grey in the background) or always test the simplest case with a single Faraday sheet before interpreting multi-peaked structures.
 
 ---
 
