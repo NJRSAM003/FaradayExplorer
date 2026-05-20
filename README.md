@@ -102,7 +102,7 @@ On startup the animated splash screen plays:
 
 followed by the file-picker dialog.
 
-**Command-line launch** (skip the splash and dialog):
+**Command-line launch** (the splash still plays — only the file picker dialog is skipped):
 
 ```bash
 # FDF-only mode

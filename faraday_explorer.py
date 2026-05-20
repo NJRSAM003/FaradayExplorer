@@ -848,11 +848,22 @@ class VideoSplash(QSplashScreen):
         self._v1, self._fps1 = self._load(SPLASH_VIDEO_1)
         self._v2, self._fps2 = self._load(SPLASH_VIDEO_2)
 
-        # Initial pixmap: first frame of whichever video loads first
+        # Initial pixmap — try in order: video frame → splash_frame.png →
+        # FEIcon.png → tiny solid colour pixmap (guaranteed non-null).
         first = (self._v1 or self._v2)
         pixmap = first[0] if first else QPixmap()
         if pixmap.isNull() and os.path.exists(SPLASH_IMAGE):
             pixmap = QPixmap(SPLASH_IMAGE)
+        if pixmap.isNull():
+            icon_path = os.path.join(_HERE, "FEIcon.png")
+            if os.path.exists(icon_path):
+                pixmap = QPixmap(icon_path).scaledToWidth(SPLASH_WIDTH,
+                                                          Qt.SmoothTransformation)
+        if pixmap.isNull():
+            # Ultimate fallback: build a 500×216 dark pixmap so something shows
+            from PyQt5.QtGui import QColor
+            pixmap = QPixmap(SPLASH_WIDTH, 216)
+            pixmap.fill(QColor(20, 20, 30))
 
         super().__init__(pixmap, Qt.WindowStaysOnTopHint)
         self.setWindowOpacity(0.0)
@@ -1940,14 +1951,13 @@ def main():
     app.setOrganizationName("AmaniAstro")
     app.setStyle("Fusion")
 
-    # ── Opening splash ───────────────────────────────────────────────────────
+    # ── Opening splash — always shown, regardless of CLI/GUI mode ─────────────
     splash = VideoSplash()
-    if not splash.pixmap().isNull():
-        loop = QEventLoop()
-        splash.finished.connect(loop.quit)
-        splash.start()
-        loop.exec_()
-        splash.close()
+    loop   = QEventLoop()
+    splash.finished.connect(loop.quit)
+    splash.start()
+    loop.exec_()
+    splash.close()
 
     # ── Resolve file paths ────────────────────────────────────────────────────
     if len(sys.argv) >= 3:
