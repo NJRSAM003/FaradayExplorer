@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # Faraday Explorer launcher.
-# Usage:  ./launch_faraday_explorer.sh [conda_env_name]
-# Default env name: faraday_explorer  (matches environment.yml)
-# Override:         ./launch_faraday_explorer.sh narnia
+# Usage:
+#   ./launch_faraday_explorer.sh                            # GUI mode
+#   ./launch_faraday_explorer.sh FDF.fits I.fits Q.fits U.fits freq.dat   # CLI mode
+#   ./launch_faraday_explorer.sh --env narnia [args...]     # use a non-default env
+# Default conda env name: faraday_explorer  (matches environment.yml)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_NAME="${1:-faraday_explorer}"
+ENV_NAME="faraday_explorer"
+
+# Parse an optional --env/-e flag (must come first)
+if [ "$1" = "--env" ] || [ "$1" = "-e" ]; then
+    ENV_NAME="$2"
+    shift 2
+elif [ -n "$1" ] && [ ! -e "$1" ] && [[ "$1" != *.fits ]] && [[ "$1" != *.FITS ]] \
+     && [[ "$1" != *.dat ]] && [[ "$1" != *.txt ]] && [[ "$1" != -* ]]; then
+    # Backward-compatible: first non-file token is treated as the env name
+    ENV_NAME="$1"
+    shift
+fi
 
 # ── Locate conda ──────────────────────────────────────────────────────────────
 find_conda() {
