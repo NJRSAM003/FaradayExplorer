@@ -100,7 +100,7 @@ bash uninstall.sh my_env_name
 
 ## Quick Start
 
-> ### **Recommended: open the app from your application menu**
+### **Recommended: open the app from your application menu**
 > After running `install.sh`, **search for *Faraday Explorer*** in your
 > desktop's application launcher (the same menu where you find Firefox, your
 > file manager, etc.) and **click the icon**. That's it — the app handles
@@ -138,8 +138,7 @@ The repo **ships with a small set of demo cubes under `dummy_cubes/`** — an
 80 × 80 pixel (2 arcmin × 2 arcmin) cutout from a real MeerKAT L-band
 observation of NGC 1097, centred at RA = 02:46:20.5  Dec = −29:35:00.5.
 
-The cubes preserve **every metadata feature** of the original data, so the
-demo session exercises the full workflow exactly as a real one would:
+The cubes preserve **every metadata feature** of the original data:
 
 - The Stokes I/Q/U cubes carry the original CASA per-channel **BEAMS**
   binary-table extension (9 rows; BMAJ range 6.7" – 12.1"), so launching the
