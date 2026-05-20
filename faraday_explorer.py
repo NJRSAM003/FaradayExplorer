@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QDoubleSpinBox, QSlider, QLineEdit,
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
+    QCheckBox, QSpinBox,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
@@ -651,6 +652,48 @@ class LaunchDialog(QDialog):
         self._u_edit = self._file_row(of, "Stokes U", "*.fits *.FITS", "u")
         vbox.addWidget(opt)
 
+        # ── Downsampling ──────────────────────────────────────────────────────
+        ds_box    = QGroupBox("Spatial downsampling")
+        ds_layout = QVBoxLayout(ds_box)
+        ds_layout.setSpacing(4)
+
+        self._ds_check = QCheckBox("Enable downsampling")
+        rec = QLabel(
+            "Recommended — greatly reduces load time and memory for large cubes."
+        )
+        rec.setStyleSheet("color: #888; font-size: 9pt;")
+        rec.setWordWrap(True)
+
+        self._ds_ctrl = QWidget()
+        ctrl_row = QHBoxLayout(self._ds_ctrl)
+        ctrl_row.setContentsMargins(0, 2, 0, 0)
+        ctrl_row.addWidget(QLabel("Resolution:"))
+        self._ds_spin = QSpinBox()
+        self._ds_spin.setRange(1, 100)
+        self._ds_spin.setSuffix(" %")
+        self._ds_spin.setFixedWidth(75)
+        self._ds_spin.setValue(int(self._cfg.value("ds_pct", 4)))
+        self._ds_step_lbl = QLabel()
+        self._ds_step_lbl.setStyleSheet("color: #555; font-size: 9pt;")
+        ctrl_row.addWidget(self._ds_spin)
+        ctrl_row.addWidget(self._ds_step_lbl)
+        ctrl_row.addStretch()
+
+        ds_layout.addWidget(self._ds_check)
+        ds_layout.addWidget(rec)
+        ds_layout.addWidget(self._ds_ctrl)
+        vbox.addWidget(ds_box)
+
+        # restore saved toggle state
+        ds_on = self._cfg.value("ds_enabled", True, type=bool)
+        self._ds_check.setChecked(ds_on)
+        self._ds_ctrl.setVisible(ds_on)
+        self._update_ds_label()
+
+        self._ds_check.toggled.connect(self._ds_ctrl.setVisible)
+        self._ds_check.toggled.connect(self._update_ds_label)
+        self._ds_spin.valueChanged.connect(self._update_ds_label)
+
         # Status line
         self._status = QLabel()
         self._status.setStyleSheet("color: #888;")
@@ -694,6 +737,13 @@ class LaunchDialog(QDialog):
         edit.textChanged.connect(self._check_ready)
         return edit
 
+    def _update_ds_label(self):
+        pct  = self._ds_spin.value()
+        step = max(1, round(100 / pct))
+        self._ds_step_lbl.setText(f"→ every {step}th pixel")
+        self._cfg.setValue("ds_pct",     pct)
+        self._cfg.setValue("ds_enabled", self._ds_check.isChecked())
+
     def _browse(self, key, edit, ffilter):
         path, _ = QFileDialog.getOpenFileName(
             self, f"Select {key} file", self._last_dir,
@@ -723,12 +773,17 @@ class LaunchDialog(QDialog):
             self._status.setStyleSheet("color: #888;")
 
     def _accept(self):
+        if self._ds_check.isChecked():
+            map_step = max(1, round(100 / self._ds_spin.value()))
+        else:
+            map_step = 1
         self.paths = {
-            "fdf":  self._fdf_edit.text(),
-            "freq": self._freq_edit.text(),
-            "i":    self._i_edit.text() or None,
-            "q":    self._q_edit.text() or None,
-            "u":    self._u_edit.text() or None,
+            "fdf":      self._fdf_edit.text(),
+            "freq":     self._freq_edit.text(),
+            "i":        self._i_edit.text() or None,
+            "q":        self._q_edit.text() or None,
+            "u":        self._u_edit.text() or None,
+            "map_step": map_step,
         }
         self.accept()
 
@@ -737,7 +792,7 @@ class LaunchDialog(QDialog):
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, fits_path, i_path, q_path, u_path, freqs):
+    def __init__(self, fits_path, i_path, q_path, u_path, freqs, map_step=MAP_STEP):
         super().__init__()
         self.setWindowTitle("QU Viewer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
@@ -758,6 +813,7 @@ class MainWindow(QMainWindow):
 
         # ── Load data ─────────────────────────────────────────────────────────
         self.has_data = self.has_qu = False
+        self.map_step = map_step
         self._load_cubes(fits_path, i_path, q_path, u_path)
 
         # ── Build UI ──────────────────────────────────────────────────────────
@@ -779,9 +835,8 @@ class MainWindow(QMainWindow):
         h = hdu[0].header
         n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
         self.phi_data = cr + (np.arange(1, n3+1) - cp) * cd
-        self.map_step = MAP_STEP
-        print("Computing peak map…")
-        self.peak_map = self.fdf_data[:, ::MAP_STEP, ::MAP_STEP].max(axis=0)
+        print(f"Computing peak map…  (map_step={self.map_step})")
+        self.peak_map = self.fdf_data[:, ::self.map_step, ::self.map_step].max(axis=0)
         self.has_data = True
         print(f"  FDF: {self.fdf_data.shape}  φ: {self.phi_data[0]:.1f}…{self.phi_data[-1]:.1f}")
 
@@ -1124,6 +1179,7 @@ def main():
             i_path = q_path = u_path = None
         else:
             fdf_path, i_path, q_path, u_path, freq_file = sys.argv[1:6]
+        map_step = MAP_STEP
         freqs = np.loadtxt(freq_file)
         print(f"CLI mode — {len(freqs)} frequencies from {freq_file}")
     else:
@@ -1133,10 +1189,11 @@ def main():
         p                      = dlg.paths
         fdf_path, freq_file    = p["fdf"], p["freq"]
         i_path, q_path, u_path = p["i"],   p["q"],   p["u"]
+        map_step               = p["map_step"]
         freqs = np.loadtxt(freq_file)
         print(f"GUI mode — {len(freqs)} frequencies from {freq_file}")
 
-    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs)
+    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step)
     win.show()
     sys.exit(app.exec_())
 
