@@ -1,9 +1,11 @@
 
 
-<p align="left">
-  <img src="FEIcon.png" alt="Faraday Explorer icon" width="120">
-  # Faraday Explorer
-</p>
+<table border="0" cellspacing="0" cellpadding="0">
+<tr>
+<td><img src="FEIcon.png" alt="Faraday Explorer icon" width="120"></td>
+<td><h1>&nbsp;Faraday Explorer</h1></td>
+</tr>
+</table>
 
 An interactive desktop application for exploring radio-polarisation models and
 real Faraday Dispersion Function (FDF) data side-by-side. The tool lets a
