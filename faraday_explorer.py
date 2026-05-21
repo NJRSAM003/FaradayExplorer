@@ -39,6 +39,15 @@ SPLASH_IMAGE    = os.path.join(_HERE, "splash_frame.png") # static fallback
 SPLASH_WIDTH    = 500   # display width in pixels (height scaled proportionally)
 SPLASH_EXTRA_MS = 1000  # ms to hold last frame of video 2 before closing
 
+# Resolve ffmpeg/ffprobe from the conda env's bin (same dir as sys.executable).
+# The launcher runs Python directly without `conda activate`, so the env's bin
+# directory is NOT on PATH — subprocess("ffmpeg") would silently fail.
+def _find_bin(name):
+    env_bin = os.path.join(os.path.dirname(sys.executable), name)
+    return env_bin if os.path.exists(env_bin) else name
+_FFMPEG  = _find_bin("ffmpeg")
+_FFPROBE = _find_bin("ffprobe")
+
 
 # ── Physical constants ────────────────────────────────────────────────────────
 C = 2.998e8
@@ -949,7 +958,7 @@ class VideoSplash(QSplashScreen):
             return [], 25.0
         try:
             raw = subprocess.check_output(
-                ['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                [_FFPROBE, '-v', 'quiet', '-print_format', 'json',
                  '-show_streams', path],
                 stderr=subprocess.DEVNULL
             )
@@ -968,7 +977,7 @@ class VideoSplash(QSplashScreen):
             if dst_h % 2:
                 dst_h += 1
             proc = subprocess.Popen(
-                ['ffmpeg', '-i', path,
+                [_FFMPEG, '-i', path,
                  '-vf', f'scale={dst_w}:{dst_h}:flags=lanczos',
                  '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
