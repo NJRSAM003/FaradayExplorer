@@ -1936,7 +1936,7 @@ class MainWindow(QMainWindow):
                      else f"model ×{model_scale:.3g}" if not normalise
                      else "model: fractional pol.")
         ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
-        ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/beam/RMSF)")
+        ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)")
         ax.set_title(f"FDF Comparison  |  model {self.model}")
 
         # Combined legend from both axes
