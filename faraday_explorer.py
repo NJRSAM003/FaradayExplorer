@@ -273,6 +273,35 @@ def model_fdf_clean(model, vals, phi, lam2):
     return np.abs(rm_synthesis(model_P(model, vals, lam2_dense), lam2_dense, phi))
 
 
+def _gaussian_restore(intrinsic_amp, phi, rmsf):
+    """Convolve an intrinsic Faraday spectrum with a Gaussian restoring beam.
+
+    The Gaussian FWHM is measured from the main lobe of the real RMSF (first
+    zero-crossing on each side of the peak), so the convolved result traces the
+    RMSF main peak shape without any sidelobes.
+    """
+    dphi = abs(phi[1] - phi[0])
+    peak_idx = int(np.argmax(rmsf))
+
+    # Left half-width at half-maximum (in bins)
+    left = rmsf[:peak_idx][::-1]
+    l_bins = next((i for i, v in enumerate(left) if v < 0.5), max(1, len(left) - 1))
+    # Right half-width at half-maximum (in bins)
+    right = rmsf[peak_idx:]
+    r_bins = next((i for i, v in enumerate(right) if v < 0.5), max(1, len(right) - 1))
+
+    fwhm  = (l_bins + r_bins) * dphi
+    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    if sigma < dphi * 0.5:
+        return intrinsic_amp          # degenerate coverage — no-op
+
+    half_w = int(np.ceil(3.5 * sigma / dphi))
+    k      = np.arange(-half_w, half_w + 1) * dphi
+    kernel = np.exp(-0.5 * (k / sigma) ** 2)
+    kernel /= kernel.sum()
+    return np.convolve(intrinsic_amp, kernel, mode='same')
+
+
 # ── ParamWidget: slider + spinbox + editable min/max ─────────────────────────
 
 class ParamWidget(QFrame):
@@ -393,32 +422,53 @@ class ParamWidget(QFrame):
 # ── ApertureEditDialog ────────────────────────────────────────────────────────
 
 class ApertureEditDialog(QDialog):
-    """Lets the user tweak an already-drawn aperture's semi-axes and PA."""
+    """Lets the user tweak an already-drawn aperture's semi-axes and PA.
 
-    def __init__(self, a_px, b_px, pa_deg, parent=None):
+    If pix_scale_ds (arcsec per downsampled pixel) is provided, the dialog
+    defaults to arcsec and shows a units dropdown to switch to pixels.
+    """
+
+    def __init__(self, a_px, b_px, pa_deg, pix_scale_ds=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Edit Aperture")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.setMinimumWidth(260)
+        self.setMinimumWidth(300)
 
-        form = QFormLayout(self)
+        self._ps   = pix_scale_ds       # arcsec / ds-px, or None
+        self._a_px = a_px               # stored in px for unit conversion
+        self._b_px = b_px
+
+        layout = QVBoxLayout(self)
+
+        # ── Units selector ────────────────────────────────────────────────────
+        units_row = QHBoxLayout()
+        units_row.addWidget(QLabel("Units:"))
+        self._units = QComboBox()
+        if pix_scale_ds:
+            self._units.addItem('arcsec (")')
+            self._units.addItem("pixels (ds-px)")
+        else:
+            self._units.addItem("pixels (ds-px)")
+        units_row.addStretch()
+        units_row.addWidget(self._units)
+        layout.addLayout(units_row)
+
+        # ── Axes spinboxes ────────────────────────────────────────────────────
+        form = QFormLayout()
+        layout.addLayout(form)
 
         self._a_spin = QDoubleSpinBox()
-        self._a_spin.setRange(0.5, 9999)
+        self._a_spin.setRange(0.01, 99999)
         self._a_spin.setDecimals(2)
         self._a_spin.setSingleStep(0.5)
-        self._a_spin.setValue(round(a_px, 2))
-        self._a_spin.setSuffix(" ds-px")
-        self._a_spin.setToolTip("Semi-major axis in downsampled-map pixels")
+        self._a_spin.setToolTip("Semi-major axis length")
         form.addRow("Semi-major (a):", self._a_spin)
 
         self._b_spin = QDoubleSpinBox()
-        self._b_spin.setRange(0.5, 9999)
+        self._b_spin.setRange(0.01, 99999)
         self._b_spin.setDecimals(2)
         self._b_spin.setSingleStep(0.5)
-        self._b_spin.setValue(round(b_px, 2))
-        self._b_spin.setSuffix(" ds-px")
-        self._b_spin.setToolTip("Semi-minor axis in downsampled-map pixels")
+        self._b_spin.setToolTip("Semi-minor axis length")
         form.addRow("Semi-minor (b):", self._b_spin)
 
         self._pa_spin = QDoubleSpinBox()
@@ -428,9 +478,16 @@ class ApertureEditDialog(QDialog):
         self._pa_spin.setWrapping(True)
         self._pa_spin.setValue(round(pa_deg % 360, 1))
         self._pa_spin.setSuffix("°")
-        self._pa_spin.setToolTip("Rotation of semi-major axis from +x (East), counter-clockwise")
+        self._pa_spin.setToolTip(
+            "Counter-clockwise rotation of the semi-major axis from the +x (East) direction")
         form.addRow("Position angle:", self._pa_spin)
 
+        # Initialise axis values in the default unit
+        self._refresh_spinboxes()
+        # Connect after initial population to avoid spurious conversions
+        self._units.currentIndexChanged.connect(self._on_units_changed)
+
+        # ── Buttons ───────────────────────────────────────────────────────────
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply")
         ok_btn.setDefault(True)
@@ -440,11 +497,48 @@ class ApertureEditDialog(QDialog):
         btns.addStretch()
         btns.addWidget(ok_btn)
         btns.addWidget(cancel_btn)
-        btn_w = QWidget(); btn_w.setLayout(btns)
-        form.addRow(btn_w)
+        layout.addLayout(btns)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _in_arcsec(self):
+        return self._ps is not None and self._units.currentIndex() == 0
+
+    def _refresh_spinboxes(self):
+        """Populate spinboxes from stored _a_px/_b_px in the current unit."""
+        if self._in_arcsec():
+            a_disp = self._a_px * self._ps
+            b_disp = self._b_px * self._ps
+            suffix = '"'
+        else:
+            a_disp = self._a_px
+            b_disp = self._b_px
+            suffix = " ds-px"
+        for spin, val in ((self._a_spin, a_disp), (self._b_spin, b_disp)):
+            spin.blockSignals(True)
+            spin.setValue(round(val, 2))
+            spin.setSuffix(suffix)
+            spin.blockSignals(False)
+
+    def _on_units_changed(self, _idx):
+        # Snapshot current displayed values back to px before switching
+        if self._in_arcsec():
+            # We just switched TO arcsec; previous unit was px
+            self._a_px = self._a_spin.value()
+            self._b_px = self._b_spin.value()
+        else:
+            # We just switched TO px; previous unit was arcsec
+            if self._ps:
+                self._a_px = self._a_spin.value() / self._ps
+                self._b_px = self._b_spin.value() / self._ps
+        self._refresh_spinboxes()
 
     def values(self):
-        """Return (a_px, b_px, pa_deg)."""
+        """Return (a_px, b_px, pa_deg) always in downsampled pixels."""
+        if self._in_arcsec() and self._ps:
+            return (self._a_spin.value() / self._ps,
+                    self._b_spin.value() / self._ps,
+                    self._pa_spin.value())
         return self._a_spin.value(), self._b_spin.value(), self._pa_spin.value()
 
 
@@ -490,11 +584,16 @@ class MapCanvas(FigureCanvas):
         self._patch             = None
         self._marker            = None
         self._aperture_finalised = False
+        self._pix_scale_ds      = None  # arcsec / downsampled-pixel (set by MainWindow)
 
         self.mpl_connect("button_press_event",   self._on_press)
         self.mpl_connect("motion_notify_event",  self._on_motion)
         self.mpl_connect("button_release_event", self._on_release)
         self.mpl_connect("scroll_event",         self._on_scroll)
+
+    def set_pixel_scale(self, pix_scale_ds):
+        """Store arcsec-per-downsampled-pixel for the aperture edit dialog."""
+        self._pix_scale_ds = pix_scale_ds
 
     # ── Scroll zoom ───────────────────────────────────────────────────────────
 
@@ -670,7 +769,9 @@ class MapCanvas(FigureCanvas):
         a   = self._patch.width  / 2
         b   = self._patch.height / 2
         pa  = self._patch.angle
-        dlg = ApertureEditDialog(a, b, pa, parent=self.parent())
+        dlg = ApertureEditDialog(a, b, pa,
+                                 pix_scale_ds=self._pix_scale_ds,
+                                 parent=self.parent())
         if dlg.exec_() != QDialog.Accepted:
             return
         a_new, b_new, pa_new = dlg.values()
@@ -1439,6 +1540,9 @@ class MainWindow(QMainWindow):
             self.map_canvas = MapCanvas(self.peak_map)
             self.map_canvas.aperture_ready.connect(self._on_aperture)
             self.map_canvas.aperture_cleared.connect(self._on_aperture_cleared)
+            bi = self.beam_info
+            if bi and bi.get("pix_scale"):
+                self.map_canvas.set_pixel_scale(bi["pix_scale"] * self.map_step)
             self._map_dock = QDockWidget("Peak |FDF| Map", self)
             self._map_dock.setWidget(self._build_map_panel())
             self._map_dock.setFeatures(dock_features)
@@ -1985,7 +2089,8 @@ class MainWindow(QMainWindow):
             fdf  = rm_synthesis(P, self.lam2, self.phi)
             amp  = np.abs(fdf)
         else:
-            amp  = model_fdf_clean(self.model, vals, self.phi, self.lam2)
+            intrinsic = model_fdf_clean(self.model, vals, self.phi, self.lam2)
+            amp       = _gaussian_restore(intrinsic, self.phi, self.rmsf)
         amax = amp.max() if amp.max() > 0 else 1.0
 
         self._draw_qu(P, freqs_G)
