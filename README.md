@@ -262,7 +262,8 @@ value is displayed to the right of the slider.
 | Double-click | Place the aperture centre (cyan `+` marker) |
 | Double-click + hold + drag | Place centre and draw the ellipse in one motion |
 | Double-click → release → click + drag | Two-step alternative |
-| Double-click on an existing aperture | Clear it |
+| Double-click **inside** an existing aperture | Open the **Edit Aperture** dialog |
+| Double-click **outside** an existing aperture | Clear it |
 
 This information is also available at any time via the **Help → Map controls**
 menu:
@@ -285,6 +286,13 @@ as a fraction of the beam FWHM (e.g. *2.4" × 1.8" (0.20 × 0.15 beams)*) when
 beam information is available. The label `[per-ch beams]` appears when CASA
 per-channel beams are used.
 
+**Editing after drawing** — double-click anywhere inside the drawn ellipse to
+open the **Edit Aperture** dialog. From there you can adjust the semi-major
+axis, semi-minor axis, and position angle (PA). Axes are shown in arcseconds
+by default when beam information is available; a **Units** dropdown lets you
+switch to downsampled pixels. The mask and FDF are recomputed immediately on
+**Apply**. To clear the aperture entirely, double-click *outside* it.
+
 ### Model & Parameters
 
 <p align="center">
@@ -304,6 +312,16 @@ when detached.
 ### FDF Display options
 
 In the controls panel, the **FDF Display** group contains:
+
+- **Convolve model with Faraday beam (RMSF)** *(default ON)* — when checked,
+  the model FDF is computed via standard RM synthesis, so it is convolved with
+  the real RMSF (sidelobes and all). When **unchecked**, the intrinsic Faraday
+  spectrum is shown instead: each component is rendered analytically (thin
+  screens → spike, Faraday-dispersed → Gaussian in φ, Burn slabs → tophat),
+  then convolved with a **Gaussian restoring beam** whose FWHM is measured
+  from the main lobe of the real RMSF. The result traces the RMSF main peak
+  shape without sidelobes — useful for seeing the clean model structure and
+  comparing it directly against the data.
 
 - **Normalise model to data peak** *(default ON)* — scales the model FDF so
   its peak equals the data peak. The y-axis then reads directly in
