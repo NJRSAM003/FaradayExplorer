@@ -220,6 +220,59 @@ def rm_synthesis(P, lam2, phi):
     return (np.exp(-2j * np.outer(phi, lam2)) @ P) / len(lam2)
 
 
+def model_fdf_clean(model, vals, phi, lam2):
+    """Intrinsic Faraday spectrum — no RMSF convolution.
+
+    Each model component is rendered analytically in Faraday-depth space:
+    thin screens → narrow Gaussian spike, dispersed screens → Gaussian in φ,
+    Burn slabs → rectangular tophat.  m7 / m12 (complex internal structure)
+    fall back to dense uniform λ² sampling (minimal sidelobe approximation).
+    """
+    dphi = phi[1] - phi[0]
+
+    def spike(p0, rm):
+        s = max(dphi * 0.4, 1.0)
+        return abs(p0) * np.exp(-0.5 * ((phi - rm) / s) ** 2)
+
+    def gauss_disp(p0, rm, sigma_rm):
+        s = np.sqrt(2.0) * abs(sigma_rm) if abs(sigma_rm) > dphi * 0.5 else dphi * 0.5
+        return abs(p0) * np.exp(-0.5 * ((phi - rm) / s) ** 2)
+
+    def rect_slab(p0, rm, drm):
+        rm1, rm2 = sorted([rm, rm + drm])
+        if abs(drm) < dphi:
+            return spike(p0, 0.5 * (rm1 + rm2))
+        return np.where((phi >= rm1) & (phi <= rm2), abs(p0), 0.0)
+
+    if model == "m1":
+        p0, c0, RM = vals
+        return spike(p0, RM)
+    if model == "m2":
+        p0, c0, RM, s = vals
+        return gauss_disp(p0, RM, s)
+    if model == "m5":
+        p0, c0, RM, dRM = vals
+        return rect_slab(p0, RM, dRM)
+    if model == "m6":
+        p1, c1, RM1, dRM1, p2, c2, RM2, dRM2 = vals
+        return rect_slab(p1, RM1, dRM1) + rect_slab(p2, RM2, dRM2)
+    if model == "m11":
+        p1, c1, RM1, p2, c2, RM2 = vals
+        return spike(p1, RM1) + spike(p2, RM2)
+    if model == "m3":
+        p1, c1, RM1, p2, c2, RM2, s = vals
+        return gauss_disp(p1, RM1, s) + gauss_disp(p2, RM2, s)
+    if model == "m4":
+        p1, c1, RM1, s1, p2, c2, RM2, s2 = vals
+        return gauss_disp(p1, RM1, s1) + gauss_disp(p2, RM2, s2)
+    if model == "m111":
+        p1, c1, RM1, p2, c2, RM2, p3, c3, RM3 = vals
+        return spike(p1, RM1) + spike(p2, RM2) + spike(p3, RM3)
+    # m7, m12: no closed-form FT — approximate with dense uniform λ² grid
+    lam2_dense = np.linspace(lam2.min(), lam2.max(), 4000)
+    return np.abs(rm_synthesis(model_P(model, vals, lam2_dense), lam2_dense, phi))
+
+
 # ── ParamWidget: slider + spinbox + editable min/max ─────────────────────────
 
 class ParamWidget(QFrame):
@@ -337,10 +390,68 @@ class ParamWidget(QFrame):
         self._guard = False
 
 
+# ── ApertureEditDialog ────────────────────────────────────────────────────────
+
+class ApertureEditDialog(QDialog):
+    """Lets the user tweak an already-drawn aperture's semi-axes and PA."""
+
+    def __init__(self, a_px, b_px, pa_deg, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Aperture")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setMinimumWidth(260)
+
+        form = QFormLayout(self)
+
+        self._a_spin = QDoubleSpinBox()
+        self._a_spin.setRange(0.5, 9999)
+        self._a_spin.setDecimals(2)
+        self._a_spin.setSingleStep(0.5)
+        self._a_spin.setValue(round(a_px, 2))
+        self._a_spin.setSuffix(" ds-px")
+        self._a_spin.setToolTip("Semi-major axis in downsampled-map pixels")
+        form.addRow("Semi-major (a):", self._a_spin)
+
+        self._b_spin = QDoubleSpinBox()
+        self._b_spin.setRange(0.5, 9999)
+        self._b_spin.setDecimals(2)
+        self._b_spin.setSingleStep(0.5)
+        self._b_spin.setValue(round(b_px, 2))
+        self._b_spin.setSuffix(" ds-px")
+        self._b_spin.setToolTip("Semi-minor axis in downsampled-map pixels")
+        form.addRow("Semi-minor (b):", self._b_spin)
+
+        self._pa_spin = QDoubleSpinBox()
+        self._pa_spin.setRange(0, 360)
+        self._pa_spin.setDecimals(1)
+        self._pa_spin.setSingleStep(5.0)
+        self._pa_spin.setWrapping(True)
+        self._pa_spin.setValue(round(pa_deg % 360, 1))
+        self._pa_spin.setSuffix("°")
+        self._pa_spin.setToolTip("Rotation of semi-major axis from +x (East), counter-clockwise")
+        form.addRow("Position angle:", self._pa_spin)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("Apply")
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        btn_w = QWidget(); btn_w.setLayout(btns)
+        form.addRow(btn_w)
+
+    def values(self):
+        """Return (a_px, b_px, pa_deg)."""
+        return self._a_spin.value(), self._b_spin.value(), self._pa_spin.value()
+
+
 # ── MapCanvas: FDF peak map with aperture drawing ────────────────────────────
 
 class MapCanvas(FigureCanvas):
-    aperture_ready   = pyqtSignal(np.ndarray, float, float, float, float)  # mask,cx,cy,a,b
+    aperture_ready   = pyqtSignal(np.ndarray, float, float, float, float, float)  # mask,cx,cy,a,b,pa
     aperture_cleared = pyqtSignal()
 
     _MIN_DRAG_PX = 4
@@ -375,6 +486,7 @@ class MapCanvas(FigureCanvas):
         self._press_xy   = None   # canvas pos at last button-press (for drag threshold)
         self._apert_cx          = None
         self._apert_cy          = None
+        self._apert_pa          = 0.0   # PA of finalised aperture (degrees)
         self._patch             = None
         self._marker            = None
         self._aperture_finalised = False
@@ -410,8 +522,12 @@ class MapCanvas(FigureCanvas):
             self._press_xy = (ev.x, ev.y)
             if ev.dblclick:
                 if self._aperture_finalised:
-                    # Second double-click clears the existing aperture
-                    self._clear_aperture()
+                    if self._inside_aperture(ev.xdata, ev.ydata):
+                        # Double-click inside existing aperture → edit it
+                        self._open_aperture_edit()
+                    else:
+                        # Double-click outside → clear
+                        self._clear_aperture()
                     return
                 # Place centre marker; button still held → enter drawing immediately
                 self._place_centre(ev.xdata, ev.ydata)
@@ -506,25 +622,67 @@ class MapCanvas(FigureCanvas):
     def _finalise_aperture(self, x, y):
         a = max(abs(x - self._apert_cx), 0.5)
         b = max(abs(y - self._apert_cy), 0.5)
+        cx, cy = self._apert_cx, self._apert_cy
 
         if self._patch: self._patch.remove()
         self._patch = mpatches.Ellipse(
-            (self._apert_cx, self._apert_cy), width=2*a, height=2*b,
+            (cx, cy), width=2*a, height=2*b, angle=0.0,
             fill=False, edgecolor="cyan", lw=2.0, zorder=5)
         self.ax.add_patch(self._patch)
         if self._marker: self._marker.remove(); self._marker = None
         self.draw_idle()
 
-        ys, xs = np.ogrid[0:self._ny, 0:self._nx]
-        mask = (((xs - self._apert_cx) / a) ** 2 +
-                ((ys - self._apert_cy) / b) ** 2) <= 1.0
-        if mask.sum() > 0:
-            self._aperture_finalised = True
-            self.aperture_ready.emit(mask,
-                                     float(self._apert_cx),
-                                     float(self._apert_cy),
-                                     float(a), float(b))
+        self._aperture_finalised = True
         self._apert_cx = self._apert_cy = None
+        self._emit_aperture_from_patch()
+
+    def _emit_aperture_from_patch(self):
+        """Recompute mask from current patch geometry and emit aperture_ready."""
+        cx, cy = self._patch.center
+        a   = max(self._patch.width  / 2, 0.5)
+        b   = max(self._patch.height / 2, 0.5)
+        pa  = self._patch.angle
+        ys, xs = np.ogrid[0:self._ny, 0:self._nx]
+        pa_rad = np.deg2rad(pa)
+        cos_a, sin_a = np.cos(pa_rad), np.sin(pa_rad)
+        dx, dy = xs - cx, ys - cy
+        x_rot  = dx * cos_a + dy * sin_a
+        y_rot  = -dx * sin_a + dy * cos_a
+        mask   = (x_rot / a) ** 2 + (y_rot / b) ** 2 <= 1.0
+        if mask.sum() > 0:
+            self.aperture_ready.emit(mask, float(cx), float(cy),
+                                     float(a), float(b), float(pa))
+
+    def _inside_aperture(self, x, y):
+        if self._patch is None:
+            return False
+        cx, cy = self._patch.center
+        a = max(self._patch.width  / 2, 0.5)
+        b = max(self._patch.height / 2, 0.5)
+        pa_rad = np.deg2rad(self._patch.angle)
+        dx, dy = x - cx, y - cy
+        x_rot  = dx * np.cos(pa_rad) + dy * np.sin(pa_rad)
+        y_rot  = -dx * np.sin(pa_rad) + dy * np.cos(pa_rad)
+        return (x_rot / a) ** 2 + (y_rot / b) ** 2 <= 1.5   # slight margin for usability
+
+    def _open_aperture_edit(self):
+        cx, cy = self._patch.center
+        a   = self._patch.width  / 2
+        b   = self._patch.height / 2
+        pa  = self._patch.angle
+        dlg = ApertureEditDialog(a, b, pa, parent=self.parent())
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        a_new, b_new, pa_new = dlg.values()
+        a_new = max(0.5, a_new)
+        b_new = max(0.5, b_new)
+        if self._patch: self._patch.remove()
+        self._patch = mpatches.Ellipse(
+            (cx, cy), width=2*a_new, height=2*b_new, angle=pa_new,
+            fill=False, edgecolor="cyan", lw=2.0, zorder=5)
+        self.ax.add_patch(self._patch)
+        self.draw_idle()
+        self._emit_aperture_from_patch()
 
     def _clear_aperture(self):
         if self._patch:  self._patch.remove();  self._patch  = None
@@ -1346,7 +1504,8 @@ class MainWindow(QMainWindow):
             "<tr><td><b>Double-click</b></td><td>— place the aperture centre</td></tr>"
             "<tr><td><b>Double-click + hold + drag</b></td><td>— draw the ellipse in one motion</td></tr>"
             "<tr><td><b>Double-click then click + drag</b></td><td>— alternative two-step draw</td></tr>"
-            "<tr><td><b>Double-click an existing aperture</b></td><td>— clear it</td></tr>"
+            "<tr><td><b>Double-click inside aperture</b></td><td>— edit semi-axes &amp; position angle</td></tr>"
+            "<tr><td><b>Double-click outside aperture</b></td><td>— clear it</td></tr>"
             "</table>"
             "<br>Drag horizontally for a wide ellipse, vertically for a tall one, "
             "or diagonally for both axes set independently."
@@ -1463,6 +1622,18 @@ class MainWindow(QMainWindow):
         # ── FDF display options ───────────────────────────────────────────────
         disp_grp = QGroupBox("FDF Display")
         disp_layout = QVBoxLayout(disp_grp)
+
+        self._convolve_cb = QCheckBox("Convolve model with Faraday beam (RMSF)")
+        self._convolve_cb.setChecked(True)
+        self._convolve_cb.setToolTip(
+            "ON  — model is convolved with the real RMSF (as observed)\n"
+            "OFF — intrinsic Faraday spectrum: thin screens → narrow spike,\n"
+            "       dispersed screens → Gaussian in φ, Burn slabs → tophat.\n"
+            "       Use this to compare the ideal model shape with the data."
+        )
+        self._convolve_cb.toggled.connect(self._schedule_update)
+        disp_layout.addWidget(self._convolve_cb)
+
         self._normalise_cb = QCheckBox("Normalise model to data peak")
         self._normalise_cb.setChecked(True)
         self._normalise_cb.setToolTip(
@@ -1742,10 +1913,11 @@ class MainWindow(QMainWindow):
     def _schedule_update(self):
         self._update_timer.start(40)
 
-    def _on_aperture(self, mask, cx, cy, a, b):
+    def _on_aperture(self, mask, cx, cy, a, b, pa):
         n_pix = int(mask.sum())
         ds = self.fdf_data[:, ::self.map_step, ::self.map_step]
         self.real_fdf   = ds[:, mask].sum(axis=1).astype(np.float64)
+        pa_str = f"  PA={pa:.1f}°" if abs(pa) > 0.05 else ""
         bi = self.beam_info
         if bi and bi.get("pix_scale"):
             ps    = bi["pix_scale"] * self.map_step
@@ -1755,16 +1927,16 @@ class MainWindow(QMainWindow):
             per_ch = bi.get("per_channel")
             beam_note = " [per-ch beams]" if per_ch is not None else ""
             if bmaj > 0:
-                self.real_label = (f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\""
+                self.real_label = (f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\"{pa_str}"
                                    f" ({a_arc/bmaj:.2f} × {b_arc/bmaj:.2f} beams{beam_note})")
-                status_r = (f"{a_arc:.1f}\" × {b_arc:.1f}\""
+                status_r = (f"{a_arc:.1f}\" × {b_arc:.1f}\"{pa_str}"
                             f" ({a_arc/bmaj:.2f} × {b_arc/bmaj:.2f} beams{beam_note})")
             else:
-                self.real_label = f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\"{beam_note}"
-                status_r = f"{a_arc:.1f}\" × {b_arc:.1f}\"{beam_note}"
+                self.real_label = f"aperture  {a_arc:.1f}\" × {b_arc:.1f}\"{pa_str}{beam_note}"
+                status_r = f"{a_arc:.1f}\" × {b_arc:.1f}\"{pa_str}{beam_note}"
         else:
-            self.real_label = f"aperture  {a:.1f} × {b:.1f} ds-px  ({n_pix} px)"
-            status_r = f"{a:.1f} × {b:.1f} ds-px"
+            self.real_label = f"aperture  {a:.1f} × {b:.1f} ds-px{pa_str}  ({n_pix} px)"
+            status_r = f"{a:.1f} × {b:.1f} ds-px{pa_str}"
 
         # Pre-fill model scale spinbox when data arrives (used when normalise=OFF)
         if not self._normalise_cb.isChecked() and hasattr(self, '_last_amax'):
@@ -1807,10 +1979,14 @@ class MainWindow(QMainWindow):
     def _update(self):
         vals    = self._get_vals()
         P       = model_P(self.model, vals, self.lam2)
-        fdf     = rm_synthesis(P, self.lam2, self.phi)
-        amp     = np.abs(fdf)
-        amax    = amp.max() if amp.max() > 0 else 1.0
         freqs_G = self.freqs / 1e9
+
+        if self._convolve_cb.isChecked():
+            fdf  = rm_synthesis(P, self.lam2, self.phi)
+            amp  = np.abs(fdf)
+        else:
+            amp  = model_fdf_clean(self.model, vals, self.phi, self.lam2)
+        amax = amp.max() if amp.max() > 0 else 1.0
 
         self._draw_qu(P, freqs_G)
         self._draw_fdf(amp, amax)
@@ -1841,6 +2017,7 @@ class MainWindow(QMainWindow):
         self._last_amax = amax   # cache for _on_normalise_toggled
         ax        = self.fdf_ax
         normalise = self._normalise_cb.isChecked()
+        convolved = self._convolve_cb.isChecked()
         # Remove any stale twin axes from prior calls (prevents RMSF shade stacking)
         for axis in list(self.fdf_fig.axes):
             if axis is not ax:
@@ -1852,15 +2029,16 @@ class MainWindow(QMainWindow):
         has_data = self.real_fdf is not None and self.real_fdf.max() > 0
         real_max = float(self.real_fdf.max()) if has_data else None
 
+        beam_tag  = "" if convolved else "  [no RMSF]"
         if has_data and normalise and amax > 0:
             model_scale = real_max / amax
-            model_lbl   = "|FDF| model  (scaled to data peak)"
+            model_lbl   = f"|FDF| model  (scaled to data peak){beam_tag}"
         elif not normalise:
             model_scale = self._model_scale_spin.value()
-            model_lbl   = f"|FDF| model  (×{model_scale:.3g})"
+            model_lbl   = f"|FDF| model  (×{model_scale:.3g}){beam_tag}"
         else:
             model_scale = 1.0
-            model_lbl   = "|FDF| model"
+            model_lbl   = f"|FDF| model{beam_tag}"
 
         model_amp  = amp * model_scale
         model_peak = amax * model_scale
@@ -1935,9 +2113,10 @@ class MainWindow(QMainWindow):
         norm_note = ("model scaled to data peak" if (has_data and normalise)
                      else f"model ×{model_scale:.3g}" if not normalise
                      else "model: fractional pol.")
+        beam_note = "RMSF-convolved" if convolved else "intrinsic — no RMSF"
         ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
         ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)")
-        ax.set_title(f"FDF Comparison  |  model {self.model}")
+        ax.set_title(f"FDF Comparison  |  model {self.model}  |  {beam_note}")
 
         # Combined legend from both axes
         lines1, labs1 = ax.get_legend_handles_labels()
