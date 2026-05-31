@@ -313,15 +313,10 @@ when detached.
 
 In the controls panel, the **FDF Display** group contains:
 
-- **Convolve model with Faraday beam (RMSF)** *(default ON)* — when checked,
-  the model FDF is computed via standard RM synthesis, so it is convolved with
-  the real RMSF (sidelobes and all). When **unchecked**, the intrinsic Faraday
-  spectrum is shown instead: each component is rendered analytically (thin
-  screens → spike, Faraday-dispersed → Gaussian in φ, Burn slabs → tophat),
-  then convolved with a **Gaussian restoring beam** whose FWHM is measured
-  from the main lobe of the real RMSF. The result traces the RMSF main peak
-  shape without sidelobes — useful for seeing the clean model structure and
-  comparing it directly against the data.
+- **Convolve model with Faraday beam (RMSF)** *(default ON)* — when unchecked,
+  the model is shown as a clean Faraday spectrum free of RMSF sidelobes,
+  at the same resolution as the data. Useful for comparing the ideal model
+  shape directly against the observed FDF.
 
 - **Normalise model to data peak** *(default ON)* — scales the model FDF so
   its peak equals the data peak. The y-axis then reads directly in
