@@ -40,8 +40,9 @@ works with any FITS data that follows standard WCS conventions.
 
 ### Prerequisites
 
-- [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html) — the installer searches the usual locations (`~/anaconda3`, `~/miniconda3`, `~/miniforge3`, etc.)
-- A Linux desktop environment with `~/.local/share/applications` for the menu entry. macOS / Windows users can still run the script from the terminal.
+- [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html) — the installer searches the usual locations (`~/anaconda3`, `~/miniconda3`, `~/miniforge3`, `/opt/anaconda3`, etc.)
+- **Linux**: a desktop environment with `~/.local/share/applications` for the menu entry.
+- **macOS**: `sips` and `iconutil` are used for icon conversion — both ship with macOS, no extras needed.
 
 `ffmpeg` is bundled automatically by the conda environment — no separate
 install is required.
@@ -54,7 +55,10 @@ cd FaradayExplorer
 bash install.sh
 ```
 
-`install.sh` will create (or update) a conda environment named `faraday_explorer` from `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg) and writes a desktop entry to `~/.local/share/applications/` so *Faraday Explorer* appears in your application menu. It also marks the launcher script as executable for terminal usage.
+`install.sh` creates (or updates) a conda environment named `faraday_explorer` from `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg), then registers a clickable launcher:
+
+- **Linux** — writes a `.desktop` entry to `~/.local/share/applications/` so *Faraday Explorer* appears in your application menu.
+- **macOS** — builds a `FaradayExplorer.app` bundle in `~/Applications/`. Double-click it in Finder or drag it to your Dock. The `.app` references the cloned repo directory, so don't move the folder without re-running `install.sh`.
 
 You can also specify the environment name if need be: 
 
@@ -548,9 +552,14 @@ secondary components. Always check the RMSF response (shaded grey in the backgro
 
 ## Troubleshooting
 
-**The desktop icon doesn't launch the app.**
+**The desktop icon doesn't launch the app (Linux).**
 Right-click the shortcut on your desktop and choose *Allow Launching* (GNOME
 requires explicit trust for `.desktop` files copied into Desktop).
+
+**FaradayExplorer.app won't open on macOS ("unidentified developer").**
+Right-click (or Control-click) the `.app` in Finder and choose *Open*, then
+confirm in the dialog. Alternatively run `xattr -cr ~/Applications/FaradayExplorer.app`
+in the terminal to strip the quarantine flag, after which double-clicking works normally.
 
 **`conda not found` when running the launcher.**
 Edit the `find_conda()` block at the top of `launch_faraday_explorer.sh` to
