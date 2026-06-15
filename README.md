@@ -41,13 +41,13 @@ works with any FITS data that follows standard WCS conventions.
 ### Prerequisites
 
 - [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html) — the installer searches the usual locations (`~/anaconda3`, `~/miniconda3`, `~/miniforge3`, `/opt/anaconda3`, etc.)
-- **Linux**: a desktop environment with `~/.local/share/applications` for the menu entry.
-- **macOS**: `sips` and `iconutil` are used for icon conversion — both ship with macOS, no extras needed.
 
 `ffmpeg` is bundled automatically by the conda environment — no separate
 install is required.
 
 ### Steps
+
+Supported on **Linux** and **macOS** — the same command works on both:
 
 ```bash
 git clone https://github.com/NJRSAM003/FaradayExplorer.git
@@ -55,10 +55,7 @@ cd FaradayExplorer
 bash install.sh
 ```
 
-`install.sh` creates (or updates) a conda environment named `faraday_explorer` from `environment.yml` (numpy, scipy, matplotlib, astropy, PyQt5, ffmpeg), then registers a clickable launcher:
-
-- **Linux** — writes a `.desktop` entry to `~/.local/share/applications/` so *Faraday Explorer* appears in your application menu.
-- **macOS** — builds a `FaradayExplorer.app` bundle in `~/Applications/`. Double-click it in Finder or drag it to your Dock. The `.app` references the cloned repo directory, so don't move the folder without re-running `install.sh`.
+The installer sets everything up and registers a clickable launcher appropriate for your platform.
 
 You can also specify the environment name if need be: 
 
