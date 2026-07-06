@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
 )
 from PyQt5.QtWidgets import QSplashScreen
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QThread
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
 from PyQt5.QtGui import QFont, QPixmap, QImage
 
 # Two-phase splash: branding video → app-name video.
@@ -1532,80 +1532,11 @@ class LaunchDialog(QDialog):
         self.accept()
 
 
-# ── Background data-loader thread ────────────────────────────────────────────
-
-class _DataLoader(QThread):
-    progress = pyqtSignal(int, str)   # percent, status message
-    loaded   = pyqtSignal(dict)       # all loaded arrays
-    failed   = pyqtSignal(str)        # error message
-
-    def __init__(self, paths, map_step):
-        super().__init__()
-        self._paths    = paths
-        self._map_step = map_step
-
-    def run(self):
-        try:
-            from astropy.io import fits as _fits
-            result = {"has_data": False, "has_qu": False}
-
-            fdf_path = self._paths["fdf"]
-            if not os.path.exists(fdf_path):
-                raise FileNotFoundError(f"FDF cube not found: {fdf_path}")
-
-            self.progress.emit(5, "Opening FDF cube…")
-            hdu   = _fits.open(fdf_path, memmap=True)
-            data  = hdu[0].data
-            h     = hdu[0].header
-            n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
-            result["fdf_data"] = data
-            result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
-
-            self.progress.emit(15, "Reading WCS…")
-            try:
-                from astropy.wcs import WCS
-                result["wcs2d"] = WCS(h, naxis=2)
-            except Exception:
-                result["wcs2d"] = None
-
-            self.progress.emit(30, "Computing peak map…")
-            result["peak_map"] = data[:, ::self._map_step, ::self._map_step].max(axis=0)
-            result["has_data"] = True
-
-            fs   = self._paths.get("full_stokes")
-            i_p  = self._paths.get("i")
-            q_p  = self._paths.get("q")
-            u_p  = self._paths.get("u")
-
-            if fs and os.path.exists(fs):
-                self.progress.emit(55, "Opening full Stokes cube…")
-                i_d, q_d, u_d = _extract_stokes_iqu(fs)
-                self.progress.emit(90, "Extracting I / Q / U planes…")
-                result["i_data"] = i_d
-                result["q_data"] = q_d
-                result["u_data"] = u_d
-                result["has_qu"] = True
-            elif all(p and os.path.exists(p) for p in [i_p, q_p, u_p]):
-                self.progress.emit(55, "Loading Stokes I…")
-                result["i_data"] = _fits.open(i_p, memmap=True)[0].data
-                self.progress.emit(70, "Loading Stokes Q…")
-                result["q_data"] = _fits.open(q_p, memmap=True)[0].data
-                self.progress.emit(85, "Loading Stokes U…")
-                result["u_data"] = _fits.open(u_p, memmap=True)[0].data
-                result["has_qu"] = True
-
-            self.progress.emit(100, "Done.")
-            self.loaded.emit(result)
-
-        except Exception as exc:
-            import traceback
-            self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
-
-
 # ── Loading progress dialog ───────────────────────────────────────────────────
 
 class LoadingDialog(QDialog):
-    """Modal progress dialog shown while cubes load in a background thread."""
+    """Modal progress dialog — loads cubes synchronously with processEvents()
+    between steps so the bar stays live without needing a background thread."""
 
     def __init__(self, paths, map_step, parent=None):
         super().__init__(parent)
@@ -1615,6 +1546,8 @@ class LoadingDialog(QDialog):
         self.setModal(True)
         self.result_data = None
         self.error_msg   = None
+        self._paths      = paths
+        self._map_step   = map_step
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -1632,29 +1565,77 @@ class LoadingDialog(QDialog):
         self._bar.setMinimumHeight(18)
         layout.addWidget(self._bar)
 
-        self._status = QLabel("Starting…")
-        self._status.setAlignment(Qt.AlignCenter)
-        self._status.setStyleSheet("color: #888; font-size: 9pt;")
-        layout.addWidget(self._status)
+        self._lbl = QLabel("Starting…")
+        self._lbl.setAlignment(Qt.AlignCenter)
+        self._lbl.setStyleSheet("color: #888; font-size: 9pt;")
+        layout.addWidget(self._lbl)
 
-        self._loader = _DataLoader(paths, map_step)
-        self._loader.progress.connect(self._on_progress)
-        self._loader.loaded.connect(self._on_loaded)
-        self._loader.failed.connect(self._on_failed)
-        self._loader.start()
+        # Give the dialog one event-loop tick to paint before loading starts
+        QTimer.singleShot(80, self._do_load)
 
-    def _on_progress(self, pct, msg):
+    def _step(self, pct, msg):
         self._bar.setValue(pct)
-        self._status.setText(msg)
+        self._lbl.setText(msg)
+        QApplication.processEvents()
 
-    def _on_loaded(self, data):
-        self.result_data = data
-        self._bar.setValue(100)
-        self.accept()
+    def _do_load(self):
+        try:
+            from astropy.io import fits as _fits
+            result = {"has_data": False, "has_qu": False}
 
-    def _on_failed(self, msg):
-        self.error_msg = msg
-        self.reject()
+            fdf_path = self._paths["fdf"]
+            if not os.path.exists(fdf_path):
+                raise FileNotFoundError(f"FDF cube not found: {fdf_path}")
+
+            self._step(5,  "Opening FDF cube…")
+            hdu  = _fits.open(fdf_path, memmap=True)
+            data = hdu[0].data
+            h    = hdu[0].header
+            n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
+            result["fdf_data"] = data
+            result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
+
+            self._step(15, "Reading WCS…")
+            try:
+                from astropy.wcs import WCS
+                result["wcs2d"] = WCS(h, naxis=2)
+            except Exception:
+                result["wcs2d"] = None
+
+            self._step(30, "Computing peak map…")
+            result["peak_map"] = data[:, ::self._map_step, ::self._map_step].max(axis=0)
+            result["has_data"] = True
+
+            fs  = self._paths.get("full_stokes")
+            i_p = self._paths.get("i")
+            q_p = self._paths.get("q")
+            u_p = self._paths.get("u")
+
+            if fs and os.path.exists(fs):
+                self._step(55, "Opening full Stokes cube…")
+                i_d, q_d, u_d = _extract_stokes_iqu(fs)
+                self._step(90, "Extracting I / Q / U planes…")
+                result["i_data"] = i_d
+                result["q_data"] = q_d
+                result["u_data"] = u_d
+                result["has_qu"] = True
+            elif all(p and os.path.exists(p) for p in [i_p, q_p, u_p]):
+                self._step(55, "Loading Stokes I…")
+                result["i_data"] = _fits.open(i_p, memmap=True)[0].data
+                self._step(70, "Loading Stokes Q…")
+                result["q_data"] = _fits.open(q_p, memmap=True)[0].data
+                self._step(85, "Loading Stokes U…")
+                result["u_data"] = _fits.open(u_p, memmap=True)[0].data
+                result["has_qu"] = True
+
+            self._step(100, "Done.")
+            self.result_data = result
+            self.accept()
+
+        except Exception as exc:
+            import traceback
+            self.error_msg = f"{exc}\n\n{traceback.format_exc()}"
+            self.reject()
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
