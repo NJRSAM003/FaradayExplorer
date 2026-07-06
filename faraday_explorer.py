@@ -1315,6 +1315,14 @@ class LaunchDialog(QDialog):
         self._setup_ui()
         self._check_ready()   # enable/disable Open based on restored paths
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # On macOS, launchd-started apps are not automatically frontmost.
+        # A deferred activateWindow() after the event loop paints the window
+        # reliably brings it to front without needing any private APIs.
+        QTimer.singleShot(0, self.raise_)
+        QTimer.singleShot(0, self.activateWindow)
+
     def _setup_ui(self):
         vbox = QVBoxLayout(self)
         vbox.setSpacing(10)
@@ -2538,30 +2546,6 @@ def main():
     splash.start()
     loop.exec_()
     splash.close()
-
-    # macOS: after the splash closes there is briefly no active window, and
-    # macOS may leave the app deactivated — any subsequent dialog would open
-    # invisibly.  Force NSApp to become the frontmost app before continuing.
-    if sys.platform == "darwin":
-        try:
-            import ctypes, ctypes.util
-            _objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
-            _objc.objc_getClass.restype    = ctypes.c_void_p
-            _objc.sel_registerName.restype = ctypes.c_void_p
-            _objc.objc_msgSend.restype     = ctypes.c_void_p
-            _objc.objc_msgSend.argtypes    = [ctypes.c_void_p, ctypes.c_void_p]
-            _nsapp = _objc.objc_msgSend(
-                _objc.objc_getClass(b"NSApplication"),
-                _objc.sel_registerName(b"sharedApplication"),
-            )
-            _objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
-            _objc.objc_msgSend(
-                _nsapp,
-                _objc.sel_registerName(b"activateIgnoringOtherApps:"),
-                True,
-            )
-        except Exception:
-            pass
 
     # ── Resolve file paths ────────────────────────────────────────────────────
     preloaded        = None
