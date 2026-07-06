@@ -24,10 +24,10 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QDoubleSpinBox, QSlider, QLineEdit,
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
-    QCheckBox, QSpinBox, QMessageBox, QStackedWidget,
+    QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
 )
 from PyQt5.QtWidgets import QSplashScreen
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QThread
 from PyQt5.QtGui import QFont, QPixmap, QImage
 
 # Two-phase splash: branding video → app-name video.
@@ -1532,12 +1532,138 @@ class LaunchDialog(QDialog):
         self.accept()
 
 
+# ── Background data-loader thread ────────────────────────────────────────────
+
+class _DataLoader(QThread):
+    progress = pyqtSignal(int, str)   # percent, status message
+    loaded   = pyqtSignal(dict)       # all loaded arrays
+    failed   = pyqtSignal(str)        # error message
+
+    def __init__(self, paths, map_step):
+        super().__init__()
+        self._paths    = paths
+        self._map_step = map_step
+
+    def run(self):
+        try:
+            from astropy.io import fits as _fits
+            result = {"has_data": False, "has_qu": False}
+
+            fdf_path = self._paths["fdf"]
+            if not os.path.exists(fdf_path):
+                raise FileNotFoundError(f"FDF cube not found: {fdf_path}")
+
+            self.progress.emit(5, "Opening FDF cube…")
+            hdu   = _fits.open(fdf_path, memmap=True)
+            data  = hdu[0].data
+            h     = hdu[0].header
+            n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
+            result["fdf_data"] = data
+            result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
+
+            self.progress.emit(15, "Reading WCS…")
+            try:
+                from astropy.wcs import WCS
+                result["wcs2d"] = WCS(h, naxis=2)
+            except Exception:
+                result["wcs2d"] = None
+
+            self.progress.emit(30, "Computing peak map…")
+            result["peak_map"] = data[:, ::self._map_step, ::self._map_step].max(axis=0)
+            result["has_data"] = True
+
+            fs   = self._paths.get("full_stokes")
+            i_p  = self._paths.get("i")
+            q_p  = self._paths.get("q")
+            u_p  = self._paths.get("u")
+
+            if fs and os.path.exists(fs):
+                self.progress.emit(55, "Opening full Stokes cube…")
+                i_d, q_d, u_d = _extract_stokes_iqu(fs)
+                self.progress.emit(90, "Extracting I / Q / U planes…")
+                result["i_data"] = i_d
+                result["q_data"] = q_d
+                result["u_data"] = u_d
+                result["has_qu"] = True
+            elif all(p and os.path.exists(p) for p in [i_p, q_p, u_p]):
+                self.progress.emit(55, "Loading Stokes I…")
+                result["i_data"] = _fits.open(i_p, memmap=True)[0].data
+                self.progress.emit(70, "Loading Stokes Q…")
+                result["q_data"] = _fits.open(q_p, memmap=True)[0].data
+                self.progress.emit(85, "Loading Stokes U…")
+                result["u_data"] = _fits.open(u_p, memmap=True)[0].data
+                result["has_qu"] = True
+
+            self.progress.emit(100, "Done.")
+            self.loaded.emit(result)
+
+        except Exception as exc:
+            import traceback
+            self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
+
+
+# ── Loading progress dialog ───────────────────────────────────────────────────
+
+class LoadingDialog(QDialog):
+    """Modal progress dialog shown while cubes load in a background thread."""
+
+    def __init__(self, paths, map_step, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Faraday Explorer")
+        self.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        self.setMinimumWidth(420)
+        self.setModal(True)
+        self.result_data = None
+        self.error_msg   = None
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(28, 22, 28, 22)
+
+        title = QLabel("Loading…")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        layout.addWidget(title)
+
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._bar.setTextVisible(False)
+        self._bar.setMinimumHeight(18)
+        layout.addWidget(self._bar)
+
+        self._status = QLabel("Starting…")
+        self._status.setAlignment(Qt.AlignCenter)
+        self._status.setStyleSheet("color: #888; font-size: 9pt;")
+        layout.addWidget(self._status)
+
+        self._loader = _DataLoader(paths, map_step)
+        self._loader.progress.connect(self._on_progress)
+        self._loader.loaded.connect(self._on_loaded)
+        self._loader.failed.connect(self._on_failed)
+        self._loader.start()
+
+    def _on_progress(self, pct, msg):
+        self._bar.setValue(pct)
+        self._status.setText(msg)
+
+    def _on_loaded(self, data):
+        self.result_data = data
+        self._bar.setValue(100)
+        self.accept()
+
+    def _on_failed(self, msg):
+        self.error_msg = msg
+        self.reject()
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
 
     def __init__(self, fits_path, i_path, q_path, u_path, freqs,
-                 map_step=MAP_STEP, beam_info=None, full_stokes_path=None):
+                 map_step=MAP_STEP, beam_info=None, full_stokes_path=None,
+                 _preloaded=None):
         super().__init__()
         self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
@@ -1560,7 +1686,10 @@ class MainWindow(QMainWindow):
         self.has_data = self.has_qu = False
         self.map_step  = map_step
         self.beam_info = beam_info  # dict or None
-        self._load_cubes(fits_path, i_path, q_path, u_path, full_stokes_path)
+        if _preloaded is not None:
+            self._inject_data(_preloaded)
+        else:
+            self._load_cubes(fits_path, i_path, q_path, u_path, full_stokes_path)
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self._build_ui()
@@ -1569,6 +1698,23 @@ class MainWindow(QMainWindow):
         self._update()
 
     # ── Data loading ──────────────────────────────────────────────────────────
+
+    def _inject_data(self, d):
+        """Populate data attributes from a dict produced by _DataLoader."""
+        self.fdf_data = d.get("fdf_data")
+        self.phi_data = d.get("phi_data")
+        self.wcs2d    = d.get("wcs2d")
+        self.peak_map = d.get("peak_map")
+        self.has_data = d.get("has_data", False)
+        self.has_qu   = d.get("has_qu",   False)
+        if self.has_qu:
+            self.i_data = d.get("i_data")
+            self.q_data = d.get("q_data")
+            self.u_data = d.get("u_data")
+        if self.has_data:
+            print(f"  FDF: {self.fdf_data.shape}  φ: {self.phi_data[0]:.1f}…{self.phi_data[-1]:.1f}")
+        if self.has_qu:
+            print(f"  I/Q/U: {self.i_data.shape}")
 
     def _load_cubes(self, fits_path, i_path, q_path, u_path, full_stokes_path=None):
         if not os.path.exists(fits_path):
@@ -1753,14 +1899,25 @@ class MainWindow(QMainWindow):
     def _open_new(self):
         """Show the file-picker dialog and reopen with new data."""
         dlg = LaunchDialog(self)
-        if dlg.exec_() == QDialog.Accepted:
-            p     = dlg.paths
-            freqs = np.loadtxt(p["freq"])
-            win   = MainWindow(p["fdf"], p["i"], p["q"], p["u"], freqs,
-                               map_step=p.get("map_step", MAP_STEP),
-                               full_stokes_path=p.get("full_stokes"))
-            win.show()
-            self.close()
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        p = dlg.paths
+        ok, beam_info = validate_inputs(p)
+        if not ok:
+            return
+        ms = p.get("map_step", MAP_STEP)
+        loading = LoadingDialog(p, ms, self)
+        if loading.exec_() != QDialog.Accepted:
+            if loading.error_msg:
+                QMessageBox.critical(self, "Load Failed", loading.error_msg)
+            return
+        freqs = np.loadtxt(p["freq"])
+        win = MainWindow(p["fdf"], p["i"], p["q"], p["u"], freqs,
+                         map_step=ms, beam_info=beam_info,
+                         full_stokes_path=p.get("full_stokes"),
+                         _preloaded=loading.result_data)
+        win.show()
+        self.close()
 
     def _restore_layout(self):
         """Bring all dock panels back to their default docked positions."""
@@ -2426,6 +2583,9 @@ def main():
             pass
 
     # ── Resolve file paths ────────────────────────────────────────────────────
+    preloaded        = None
+    full_stokes_path = None
+
     if len(sys.argv) >= 3:
         if len(sys.argv) == 3:
             fdf_path, freq_file = sys.argv[1], sys.argv[2]
@@ -2443,7 +2603,7 @@ def main():
             dlg = LaunchDialog()
             if dlg.exec_() != QDialog.Accepted:
                 sys.exit(0)
-            p        = dlg.paths
+            p = dlg.paths
             ok, beam_info = validate_inputs(p)
             if ok:
                 break
@@ -2454,8 +2614,15 @@ def main():
         freqs = np.loadtxt(freq_file)
         print(f"GUI mode — {len(freqs)} frequencies from {freq_file}")
 
+        loading = LoadingDialog(p, map_step)
+        if loading.exec_() != QDialog.Accepted:
+            if loading.error_msg:
+                QMessageBox.critical(None, "Load Failed", loading.error_msg)
+            sys.exit(1)
+        preloaded = loading.result_data
+
     win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info,
-                     full_stokes_path=full_stokes_path)
+                     full_stokes_path=full_stokes_path, _preloaded=preloaded)
     win.show()
     sys.exit(app.exec_())
 
