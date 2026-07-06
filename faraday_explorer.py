@@ -2401,6 +2401,30 @@ def main():
     loop.exec_()
     splash.close()
 
+    # macOS: after the splash closes there is briefly no active window, and
+    # macOS may leave the app deactivated — any subsequent dialog would open
+    # invisibly.  Force NSApp to become the frontmost app before continuing.
+    if sys.platform == "darwin":
+        try:
+            import ctypes, ctypes.util
+            _objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+            _objc.objc_getClass.restype    = ctypes.c_void_p
+            _objc.sel_registerName.restype = ctypes.c_void_p
+            _objc.objc_msgSend.restype     = ctypes.c_void_p
+            _objc.objc_msgSend.argtypes    = [ctypes.c_void_p, ctypes.c_void_p]
+            _nsapp = _objc.objc_msgSend(
+                _objc.objc_getClass(b"NSApplication"),
+                _objc.sel_registerName(b"sharedApplication"),
+            )
+            _objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            _objc.objc_msgSend(
+                _nsapp,
+                _objc.sel_registerName(b"activateIgnoringOtherApps:"),
+                True,
+            )
+        except Exception:
+            pass
+
     # ── Resolve file paths ────────────────────────────────────────────────────
     if len(sys.argv) >= 3:
         if len(sys.argv) == 3:
