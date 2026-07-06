@@ -1385,6 +1385,52 @@ class LaunchDialog(QDialog):
         self._stokes_mode.currentIndexChanged.connect(self._on_stokes_mode_changed)
         vbox.addWidget(opt)
 
+        # ── Phi axis override ─────────────────────────────────────────────────
+        phi_box = QGroupBox("Phi axis (Faraday depth)")
+        phi_vb  = QVBoxLayout(phi_box)
+        phi_vb.setSpacing(4)
+        self._phi_override_cb = QCheckBox(
+            "Override phi axis from FITS header  "
+            "(use when FITS writes FREQ instead of FDEP)"
+        )
+        phi_note = QLabel(
+            "Some RM-synthesis tools write incorrect WCS for the phi axis. "
+            "Tick this if the channel display shows Hz/GHz values instead of rad/m²."
+        )
+        phi_note.setStyleSheet("color: #888; font-size: 9pt;")
+        phi_note.setWordWrap(True)
+        phi_vb.addWidget(self._phi_override_cb)
+        phi_vb.addWidget(phi_note)
+
+        self._phi_ctrl = QWidget()
+        phi_row = QHBoxLayout(self._phi_ctrl)
+        phi_row.setContentsMargins(0, 2, 0, 0)
+        phi_row.addWidget(QLabel("φ min:"))
+        self._phi_min_spin = QDoubleSpinBox()
+        self._phi_min_spin.setRange(-100000, 0)
+        self._phi_min_spin.setDecimals(1)
+        self._phi_min_spin.setValue(float(self._cfg.value("phi_min", -1000.0)))
+        self._phi_min_spin.setSuffix(" rad/m²")
+        self._phi_min_spin.setFixedWidth(130)
+        phi_row.addWidget(self._phi_min_spin)
+        phi_row.addSpacing(12)
+        phi_row.addWidget(QLabel("φ max:"))
+        self._phi_max_spin = QDoubleSpinBox()
+        self._phi_max_spin.setRange(0, 100000)
+        self._phi_max_spin.setDecimals(1)
+        self._phi_max_spin.setValue(float(self._cfg.value("phi_max", 1000.0)))
+        self._phi_max_spin.setSuffix(" rad/m²")
+        self._phi_max_spin.setFixedWidth(130)
+        phi_row.addWidget(self._phi_max_spin)
+        phi_row.addStretch()
+        phi_vb.addWidget(self._phi_ctrl)
+
+        phi_on = self._cfg.value("phi_override", False, type=bool)
+        self._phi_override_cb.setChecked(phi_on)
+        self._phi_ctrl.setVisible(phi_on)
+        self._phi_override_cb.toggled.connect(self._phi_ctrl.setVisible)
+        vbox.addWidget(phi_box)
+
         # ── Downsampling ──────────────────────────────────────────────────────
         ds_box    = QGroupBox("Spatial downsampling")
         ds_layout = QVBoxLayout(ds_box)
@@ -1528,14 +1574,26 @@ class LaunchDialog(QDialog):
             q    = self._q_edit.text()    or None
             u    = self._u_edit.text()    or None
             full_stokes = None
+        phi_override = None
+        if self._phi_override_cb.isChecked():
+            phi_override = {
+                "min": self._phi_min_spin.value(),
+                "max": self._phi_max_spin.value(),
+            }
+            self._cfg.setValue("phi_override", True)
+            self._cfg.setValue("phi_min", self._phi_min_spin.value())
+            self._cfg.setValue("phi_max", self._phi_max_spin.value())
+        else:
+            self._cfg.setValue("phi_override", False)
         self.paths = {
-            "fdf":         self._fdf_edit.text(),
-            "freq":        self._freq_edit.text(),
-            "i":           i,
-            "q":           q,
-            "u":           u,
-            "full_stokes": full_stokes,
-            "map_step":    map_step,
+            "fdf":          self._fdf_edit.text(),
+            "freq":         self._freq_edit.text(),
+            "i":            i,
+            "q":            q,
+            "u":            u,
+            "full_stokes":  full_stokes,
+            "map_step":     map_step,
+            "phi_override": phi_override,
         }
         self.accept()
 
@@ -1609,9 +1667,16 @@ class LoadingDialog(QDialog):
                     f"(expected 3: phi × DEC × RA).  Shape: {data.shape}"
                 )
 
-            n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
+            n3 = data.shape[0]
             result["fdf_data"] = data
-            result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
+            phi_ov = self._paths.get("phi_override")
+            if phi_ov:
+                result["phi_data"] = np.linspace(
+                    phi_ov["min"], phi_ov["max"], n3, dtype=np.float64
+                )
+            else:
+                cr, cd, cp = h.get("CRVAL3", 0.0), h.get("CDELT3", 1.0), h.get("CRPIX3", 1.0)
+                result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
 
             self._step(15, "Reading WCS…")
             try:
@@ -2208,10 +2273,20 @@ class MainWindow(QMainWindow):
             self._map_ch_slider.setEnabled(True)
         self._update_map_image()
 
+    @staticmethod
+    def _fmt_phi(val):
+        """Format a phi value with appropriate units based on its magnitude."""
+        mag = abs(val)
+        if mag >= 1e8:
+            return f"{val/1e9:.3f} GHz"
+        if mag >= 1e5:
+            return f"{val/1e6:.3f} MHz"
+        return f"{val:.1f} rad/m²"
+
     def _on_map_channel_changed(self, ch):
         key = self._map_cube_cb.currentData()
         if key == "fdf_slice":
-            self._map_ch_lbl.setText(f"{self.phi_data[ch]:.0f} r/m²")
+            self._map_ch_lbl.setText(self._fmt_phi(float(self.phi_data[ch])))
         else:
             self._map_ch_lbl.setText(f"{self.freqs[ch]/1e9:.3f} GHz")
         self._update_map_image()
@@ -2221,7 +2296,7 @@ class MainWindow(QMainWindow):
         ch  = self._map_ch_slider.value()
         ms  = self.map_step
         if key == "fdf_peak":
-            img = self.fdf_data[:, ::ms, ::ms].max(axis=0)
+            img = self.peak_map   # already computed during load — never recompute
         elif key == "fdf_slice":
             img = np.abs(self.fdf_data[ch, ::ms, ::ms])
         elif key == "stokes_i":
@@ -2515,7 +2590,17 @@ class MainWindow(QMainWindow):
                      else f"model ×{model_scale:.3g}" if not normalise
                      else "model: fractional pol.")
         beam_note = "RMSF-convolved" if convolved else "intrinsic — no RMSF"
-        ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
+        if has_data and self.phi_data is not None:
+            phi_mag = abs(float(np.nanmean(np.abs(self.phi_data))))
+            if phi_mag >= 1e8:
+                phi_xlabel = "Frequency (3rd FITS axis — not φ!)  [GHz]"
+            elif phi_mag >= 1e5:
+                phi_xlabel = "Frequency (3rd FITS axis — not φ!)  [MHz]"
+            else:
+                phi_xlabel = "Faraday Depth  φ  [rad m⁻²]"
+        else:
+            phi_xlabel = "Faraday Depth  φ  [rad m⁻²]"
+        ax.set_xlabel(phi_xlabel)
         ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)")
         ax.set_title(f"FDF Comparison  |  model {self.model}  |  {beam_note}")
 
