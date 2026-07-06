@@ -48,10 +48,15 @@ fi
 
 # ── 2. Platform-specific launcher registration ────────────────────────────────
 if [ "$OS" = "Darwin" ]; then
-    # macOS: build a .app bundle in ~/Applications/
+    # macOS: build a .app bundle — prefer /Applications (visible in Finder),
+    # fall back to ~/Applications if the user lacks write permission.
     echo "[2/3] Creating macOS app bundle..."
 
-    APP_DIR="$HOME/Applications/FaradayExplorer.app"
+    if [ -w "/Applications" ]; then
+        APP_DIR="/Applications/FaradayExplorer.app"
+    else
+        APP_DIR="$HOME/Applications/FaradayExplorer.app"
+    fi
     mkdir -p "$APP_DIR/Contents/MacOS"
     mkdir -p "$APP_DIR/Contents/Resources"
 
@@ -108,9 +113,9 @@ LAUNCHER
     chmod +x "$APP_DIR/Contents/MacOS/FaradayExplorer"
 
     echo ""
-    echo "Done!  FaradayExplorer.app is in ~/Applications."
-    echo "  Open it with:  open ~/Applications/FaradayExplorer.app"
-    echo "  Or drag it from Finder to your Dock for one-click access."
+    echo "Done!  FaradayExplorer.app installed to: $APP_DIR"
+    echo "  Find it in Finder → Applications and double-click to launch."
+    echo "  Drag it to your Dock for one-click access."
     echo "  Note: the .app references this directory — don't move the repo"
     echo "  without re-running install.sh."
 
