@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QDoubleSpinBox, QSlider, QLineEdit,
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
-    QCheckBox, QSpinBox, QMessageBox,
+    QCheckBox, QSpinBox, QMessageBox, QStackedWidget,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
@@ -931,10 +931,11 @@ def validate_inputs(paths, parent=None):
     from astropy.io import fits as _fits
 
     cube_paths = [
-        ("FDF",      paths.get("fdf")),
-        ("Stokes I", paths.get("i")),
-        ("Stokes Q", paths.get("q")),
-        ("Stokes U", paths.get("u")),
+        ("FDF",          paths.get("fdf")),
+        ("Stokes I",     paths.get("i")),
+        ("Stokes Q",     paths.get("q")),
+        ("Stokes U",     paths.get("u")),
+        ("Full Stokes",  paths.get("full_stokes")),
     ]
     available = [(lbl, p) for lbl, p in cube_paths if p and os.path.exists(p)]
     if not available:
@@ -1067,7 +1068,7 @@ def validate_inputs(paths, parent=None):
 
 def _confirm_resolution(parent, headers, beam_info):
     """Show resolution-assumption confirmation — skipped when CASA BEAMS tables cover all Stokes cubes."""
-    stokes_loaded = [lbl for lbl in ("Stokes I", "Stokes Q", "Stokes U")
+    stokes_loaded = [lbl for lbl in ("Stokes I", "Stokes Q", "Stokes U", "Full Stokes")
                      if lbl in headers]
     if not stokes_loaded:
         return True, beam_info
@@ -1258,6 +1259,44 @@ class VideoSplash(QSplashScreen):
             return [], 25.0
 
 
+# ── Full-Stokes cube extraction ───────────────────────────────────────────────
+
+def _extract_stokes_iqu(path):
+    """Return (i_data, q_data, u_data) as 3-D (freq, dec, ra) arrays
+    extracted from a 4-D FITS cube that has a STOKES axis."""
+    from astropy.io import fits as _fits
+    hdul  = _fits.open(path, memmap=True)
+    data  = hdul[0].data
+    h     = hdul[0].header
+    naxis = h["NAXIS"]
+
+    stokes_fits_ax = None
+    for ax in range(1, naxis + 1):
+        if "STOKES" in h.get(f"CTYPE{ax}", "").upper():
+            stokes_fits_ax = ax
+            break
+    if stokes_fits_ax is None:
+        raise ValueError("No STOKES axis found in the cube header.")
+
+    stokes_np_ax = naxis - stokes_fits_ax   # FITS↔numpy axis reversal
+    n_stokes = h[f"NAXIS{stokes_fits_ax}"]
+    crval    = h.get(f"CRVAL{stokes_fits_ax}", 1.0)
+    cdelt    = h.get(f"CDELT{stokes_fits_ax}", 1.0)
+    crpix    = h.get(f"CRPIX{stokes_fits_ax}", 1.0)
+    vals     = np.round(crval + (np.arange(1, n_stokes + 1) - crpix) * cdelt).astype(int)
+
+    def _take(stokes_val, name):
+        idx = np.where(vals == stokes_val)[0]
+        if not len(idx):
+            raise ValueError(
+                f"Stokes {name} (code {stokes_val}) not found in cube. "
+                f"Available codes: {vals.tolist()}"
+            )
+        return np.take(data, int(idx[0]), axis=stokes_np_ax)
+
+    return _take(1, "I"), _take(2, "Q"), _take(3, "U")
+
+
 # ── Startup file-picker dialog ────────────────────────────────────────────────
 
 class LaunchDialog(QDialog):
@@ -1298,11 +1337,44 @@ class LaunchDialog(QDialog):
 
         # ── Optional Stokes cubes ────────────────────────────────────────────
         opt = QGroupBox("Stokes cubes  (optional — enables real Q/U scatter)")
-        of  = QFormLayout(opt)
-        of.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        self._i_edit = self._file_row(of, "Stokes I", "*.fits *.FITS", "i")
-        self._q_edit = self._file_row(of, "Stokes Q", "*.fits *.FITS", "q")
-        self._u_edit = self._file_row(of, "Stokes U", "*.fits *.FITS", "u")
+        ov  = QVBoxLayout(opt)
+        ov.setSpacing(6)
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Input type:"))
+        self._stokes_mode = QComboBox()
+        self._stokes_mode.addItem("Separate Stokes continuum cubes", "separate")
+        self._stokes_mode.addItem("Full Stokes full frequency cube",  "full")
+        saved_mode = self._cfg.value("stokes_mode", "separate")
+        self._stokes_mode.setCurrentIndex(0 if saved_mode != "full" else 1)
+        mode_row.addWidget(self._stokes_mode)
+        mode_row.addStretch()
+        ov.addLayout(mode_row)
+
+        self._stokes_stack = QStackedWidget()
+
+        # Page 0 — separate I, Q, U files
+        sep_w = QWidget()
+        sep_f = QFormLayout(sep_w)
+        sep_f.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self._i_edit = self._file_row(sep_f, "Stokes I", "*.fits *.FITS", "i")
+        self._q_edit = self._file_row(sep_f, "Stokes Q", "*.fits *.FITS", "q")
+        self._u_edit = self._file_row(sep_f, "Stokes U", "*.fits *.FITS", "u")
+        self._stokes_stack.addWidget(sep_w)
+
+        # Page 1 — single full-Stokes cube
+        full_w = QWidget()
+        full_f = QFormLayout(full_w)
+        full_f.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self._full_edit = self._file_row(full_f, "Full Stokes cube", "*.fits *.FITS",
+                                          "full_stokes")
+        self._stokes_stack.addWidget(full_w)
+
+        self._stokes_stack.setCurrentIndex(0 if saved_mode != "full" else 1)
+        ov.addWidget(self._stokes_stack)
+
+        self._stokes_mode.currentIndexChanged.connect(self._stokes_stack.setCurrentIndex)
+        self._stokes_mode.currentIndexChanged.connect(self._on_stokes_mode_changed)
         vbox.addWidget(opt)
 
         # ── Downsampling ──────────────────────────────────────────────────────
@@ -1398,6 +1470,10 @@ class LaunchDialog(QDialog):
         self._cfg.setValue("ds_pct",     pct)
         self._cfg.setValue("ds_enabled", self._ds_check.isChecked())
 
+    def _on_stokes_mode_changed(self, _idx):
+        self._cfg.setValue("stokes_mode", self._stokes_mode.currentData())
+        self._check_ready()
+
     def _browse(self, key, edit, ffilter):
         path, _ = QFileDialog.getOpenFileName(
             self, f"Select {key} file", self._last_dir,
@@ -1413,9 +1489,13 @@ class LaunchDialog(QDialog):
         ready = bool(self._fdf_edit.text() and self._freq_edit.text())
         self._open_btn.setEnabled(ready)
         if ready:
-            have_iqu = all([self._i_edit.text(),
-                            self._q_edit.text(),
-                            self._u_edit.text()])
+            mode = self._stokes_mode.currentData()
+            if mode == "full":
+                have_iqu = bool(self._full_edit.text())
+            else:
+                have_iqu = all([self._i_edit.text(),
+                                self._q_edit.text(),
+                                self._u_edit.text()])
             if have_iqu:
                 self._status.setText("All files set — full mode (QU scatter enabled).")
                 self._status.setStyleSheet("color: green;")
@@ -1431,13 +1511,23 @@ class LaunchDialog(QDialog):
             map_step = max(1, round(100 / self._ds_spin.value()))
         else:
             map_step = 1
+        mode = self._stokes_mode.currentData()
+        if mode == "full":
+            i = q = u = None
+            full_stokes = self._full_edit.text() or None
+        else:
+            i    = self._i_edit.text()    or None
+            q    = self._q_edit.text()    or None
+            u    = self._u_edit.text()    or None
+            full_stokes = None
         self.paths = {
-            "fdf":      self._fdf_edit.text(),
-            "freq":     self._freq_edit.text(),
-            "i":        self._i_edit.text() or None,
-            "q":        self._q_edit.text() or None,
-            "u":        self._u_edit.text() or None,
-            "map_step": map_step,
+            "fdf":         self._fdf_edit.text(),
+            "freq":        self._freq_edit.text(),
+            "i":           i,
+            "q":           q,
+            "u":           u,
+            "full_stokes": full_stokes,
+            "map_step":    map_step,
         }
         self.accept()
 
@@ -1447,7 +1537,7 @@ class LaunchDialog(QDialog):
 class MainWindow(QMainWindow):
 
     def __init__(self, fits_path, i_path, q_path, u_path, freqs,
-                 map_step=MAP_STEP, beam_info=None):
+                 map_step=MAP_STEP, beam_info=None, full_stokes_path=None):
         super().__init__()
         self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
@@ -1470,7 +1560,7 @@ class MainWindow(QMainWindow):
         self.has_data = self.has_qu = False
         self.map_step  = map_step
         self.beam_info = beam_info  # dict or None
-        self._load_cubes(fits_path, i_path, q_path, u_path)
+        self._load_cubes(fits_path, i_path, q_path, u_path, full_stokes_path)
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self._build_ui()
@@ -1480,7 +1570,7 @@ class MainWindow(QMainWindow):
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
-    def _load_cubes(self, fits_path, i_path, q_path, u_path):
+    def _load_cubes(self, fits_path, i_path, q_path, u_path, full_stokes_path=None):
         if not os.path.exists(fits_path):
             print(f"[WARN] FDF cube not found: {fits_path}")
             return
@@ -1505,7 +1595,19 @@ class MainWindow(QMainWindow):
         self.has_data = True
         print(f"  FDF: {self.fdf_data.shape}  φ: {self.phi_data[0]:.1f}…{self.phi_data[-1]:.1f}")
 
-        if all(p and os.path.exists(p) for p in [i_path, q_path, u_path]):
+        if full_stokes_path and os.path.exists(full_stokes_path):
+            print("Loading full Stokes cube (extracting I/Q/U)…")
+            try:
+                self.i_data, self.q_data, self.u_data = _extract_stokes_iqu(full_stokes_path)
+                self.has_qu = True
+                print(f"  Full Stokes → I/Q/U: {self.i_data.shape}")
+            except Exception as e:
+                QMessageBox.warning(
+                    None, "Full Stokes Extraction Failed",
+                    f"Could not extract I/Q/U from full Stokes cube:\n{e}\n\n"
+                    "Continuing without Stokes data."
+                )
+        elif all(p and os.path.exists(p) for p in [i_path, q_path, u_path]):
             print("Loading I/Q/U cubes…")
             self.i_data = _fits.open(i_path, memmap=True)[0].data
             self.q_data = _fits.open(q_path, memmap=True)[0].data
@@ -1654,7 +1756,9 @@ class MainWindow(QMainWindow):
         if dlg.exec_() == QDialog.Accepted:
             p     = dlg.paths
             freqs = np.loadtxt(p["freq"])
-            win   = MainWindow(p["fdf"], p["i"], p["q"], p["u"], freqs)
+            win   = MainWindow(p["fdf"], p["i"], p["q"], p["u"], freqs,
+                               map_step=p.get("map_step", MAP_STEP),
+                               full_stokes_path=p.get("full_stokes"))
             win.show()
             self.close()
 
@@ -2321,11 +2425,13 @@ def main():
                 break
         fdf_path, freq_file    = p["fdf"], p["freq"]
         i_path, q_path, u_path = p["i"],   p["q"],   p["u"]
+        full_stokes_path       = p.get("full_stokes")
         map_step               = p["map_step"]
         freqs = np.loadtxt(freq_file)
         print(f"GUI mode — {len(freqs)} frequencies from {freq_file}")
 
-    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info)
+    win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info,
+                     full_stokes_path=full_stokes_path)
     win.show()
     sys.exit(app.exec_())
 
