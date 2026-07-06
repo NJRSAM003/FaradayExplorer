@@ -1599,6 +1599,16 @@ class LoadingDialog(QDialog):
             hdu  = _fits.open(fdf_path, memmap=True)
             data = hdu[0].data
             h    = hdu[0].header
+
+            # Squeeze any size-1 axes (e.g. a Stokes axis in a 4D FDF cube)
+            # so downstream code always sees a 3-D (phi/freq, DEC, RA) array.
+            data = data.squeeze()
+            if data.ndim != 3:
+                raise ValueError(
+                    f"FDF cube has {data.ndim} non-trivial axes after squeezing "
+                    f"(expected 3: phi × DEC × RA).  Shape: {data.shape}"
+                )
+
             n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
             result["fdf_data"] = data
             result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
@@ -1610,8 +1620,21 @@ class LoadingDialog(QDialog):
             except Exception:
                 result["wcs2d"] = None
 
-            self._step(30, "Computing peak map…")
-            result["peak_map"] = data[:, ::self._map_step, ::self._map_step].max(axis=0)
+            # Peak map: iterate over phi slabs so processEvents() fires
+            # between each slab and macOS doesn't kill an unresponsive process.
+            n_phi   = data.shape[0]
+            step    = self._map_step
+            n_slabs = max(1, min(20, n_phi))  # up to 20 progress ticks
+            slab_sz = max(1, (n_phi + n_slabs - 1) // n_slabs)
+            peak    = None
+            for slab_start in range(0, n_phi, slab_sz):
+                slab_end  = min(slab_start + slab_sz, n_phi)
+                chunk     = data[slab_start:slab_end, ::step, ::step]
+                chunk_max = np.asarray(chunk).max(axis=0)
+                peak = chunk_max if peak is None else np.maximum(peak, chunk_max)
+                pct  = 15 + int(35 * slab_end / n_phi)   # 15 → 50 %
+                self._step(pct, f"Computing peak map… {slab_end}/{n_phi} planes")
+            result["peak_map"] = peak
             result["has_data"] = True
 
             fs  = self._paths.get("full_stokes")
