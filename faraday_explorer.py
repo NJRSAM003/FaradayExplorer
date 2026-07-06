@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
     QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
+    QToolButton, QMenu, QAction,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
@@ -1768,6 +1769,11 @@ class MainWindow(QMainWindow):
         self.real_u     = None
         self.real_label = None
 
+        # FDF overlay visibility flags (toggled via the Display menu)
+        self._show_peak_lines  = True
+        self._show_peak_labels = True
+        self._show_rmsf        = True
+
         # ── Load data ─────────────────────────────────────────────────────────
         self.has_data = self.has_qu = False
         self.map_step  = map_step
@@ -2162,7 +2168,49 @@ class MainWindow(QMainWindow):
         self.fdf_fig    = Figure(facecolor="#fafafa")
         self.fdf_canvas = FigureCanvas(self.fdf_fig)
         self.fdf_ax     = self.fdf_fig.add_subplot(111)
-        v.addWidget(NavToolbar(self.fdf_canvas, holder))
+
+        # Toolbar row: matplotlib nav toolbar + Display drop-down on the right
+        toolbar_row = QHBoxLayout()
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_row.setSpacing(0)
+        toolbar_row.addWidget(NavToolbar(self.fdf_canvas, holder))
+
+        display_btn = QToolButton()
+        display_btn.setText("Display ▾")
+        display_btn.setPopupMode(QToolButton.InstantPopup)
+        display_btn.setStyleSheet(
+            "QToolButton { padding: 3px 8px; font-size: 9pt; }"
+            "QToolButton::menu-indicator { image: none; }"
+        )
+        menu = QMenu(display_btn)
+
+        act_lines  = QAction("Peak lines",  menu, checkable=True, checked=True)
+        act_labels = QAction("Peak labels", menu, checkable=True, checked=True)
+        act_rmsf   = QAction("RMSF shading", menu, checkable=True, checked=True)
+        menu.addAction(act_lines)
+        menu.addAction(act_labels)
+        menu.addAction(act_rmsf)
+
+        def _toggle_lines(on):
+            self._show_peak_lines = on
+            self._update()
+        def _toggle_labels(on):
+            self._show_peak_labels = on
+            self._update()
+        def _toggle_rmsf(on):
+            self._show_rmsf = on
+            self._update()
+
+        act_lines.toggled.connect(_toggle_lines)
+        act_labels.toggled.connect(_toggle_labels)
+        act_rmsf.toggled.connect(_toggle_rmsf)
+
+        display_btn.setMenu(menu)
+        toolbar_row.addWidget(display_btn)
+
+        toolbar_widget = QWidget()
+        toolbar_widget.setLayout(toolbar_row)
+        v.addWidget(toolbar_widget)
         v.addWidget(self.fdf_canvas)
         return holder
 
@@ -2558,11 +2606,12 @@ class MainWindow(QMainWindow):
         # We set ax2 ylim so RMSF peak (1.0) appears at 50 % of plot height.
         ax2 = ax.twinx()
         ax2.set_ylim(0, 1.25)   # RMSF peak=1.0 at RM=0 with 0.25 headroom
-        ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color="gray")
         ax2.tick_params(axis='y', labelcolor="gray", labelsize=6)
-        ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color="gray", zorder=1)
-        ax2.plot(self.phi, self.rmsf, color="gray", lw=0.8,
-                 ls="--", alpha=0.55, label="RMSF (norm.)", zorder=1)
+        if self._show_rmsf:
+            ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color="gray")
+            ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color="gray", zorder=1)
+            ax2.plot(self.phi, self.rmsf, color="gray", lw=0.8,
+                     ls="--", alpha=0.55, label="RMSF (norm.)", zorder=1)
         # Draw RMSF behind the main data lines
         ax2.set_zorder(ax.get_zorder() - 1)
         ax.patch.set_visible(False)   # make ax background transparent so ax2 fill shows
@@ -2576,9 +2625,9 @@ class MainWindow(QMainWindow):
         # ── Model FDF ─────────────────────────────────────────────────────────
         ax.plot(self.phi, model_amp, color="steelblue", lw=1.8, label=model_lbl)
 
-        dphi    = (PHI_MAX - PHI_MIN) / (N_PHI - 1)
+        dphi    = abs(self.phi[1] - self.phi[0]) if len(self.phi) > 1 else 0.5
         min_sep = max(1, int(15.0 / dphi))
-        if model_peak > 0:
+        if model_peak > 0 and self._show_peak_lines:
             peaks, _ = find_peaks(model_amp, height=0.05*model_peak,
                                   prominence=0.20*model_peak, distance=min_sep)
             for pk in peaks:
@@ -2586,11 +2635,12 @@ class MainWindow(QMainWindow):
                 ax.axvline(phi_pk, color="steelblue", lw=0.9, ls="--", alpha=0.7)
                 ax.scatter([phi_pk], [a_pk], color="steelblue", s=40, zorder=6,
                            edgecolors="navy", lw=0.5)
-                ax.annotate(f"φ={phi_pk:+.1f}", xy=(phi_pk, a_pk),
-                            xytext=(5, 3), textcoords="offset points",
-                            fontsize=7, color="steelblue",
-                            bbox=dict(boxstyle="round,pad=0.2", fc="white",
-                                      ec="steelblue", alpha=0.85, lw=0.5))
+                if self._show_peak_labels:
+                    ax.annotate(f"φ={phi_pk:+.1f}", xy=(phi_pk, a_pk),
+                                xytext=(5, 3), textcoords="offset points",
+                                fontsize=7, color="steelblue",
+                                bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                          ec="steelblue", alpha=0.85, lw=0.5))
 
         # ── Real FDF overlay ──────────────────────────────────────────────────
         if has_data:
@@ -2603,17 +2653,19 @@ class MainWindow(QMainWindow):
             sep_r  = max(1, int(15.0 / dphi_r))
             rp, _  = find_peaks(real_amp, height=0.05*real_max,
                                  prominence=0.10*real_max, distance=sep_r)
-            for pk in rp:
-                phi_pk = self.phi_data[pk]
-                a_pk   = real_amp[pk]
-                ax.axvline(phi_pk, color="darkorange", lw=0.9, ls="-.", alpha=0.7)
-                ax.scatter([phi_pk], [a_pk], color="darkorange", s=35, zorder=6,
-                           edgecolors="saddlebrown", lw=0.5)
-                ax.annotate(f"φ={phi_pk:+.0f}", xy=(phi_pk, a_pk),
-                            xytext=(-4, 8), textcoords="offset points",
-                            fontsize=7, color="darkorange",
-                            bbox=dict(boxstyle="round,pad=0.2", fc="white",
-                                      ec="darkorange", alpha=0.85, lw=0.5))
+            if self._show_peak_lines:
+                for pk in rp:
+                    phi_pk = self.phi_data[pk]
+                    a_pk   = real_amp[pk]
+                    ax.axvline(phi_pk, color="darkorange", lw=0.9, ls="-.", alpha=0.7)
+                    ax.scatter([phi_pk], [a_pk], color="darkorange", s=35, zorder=6,
+                               edgecolors="saddlebrown", lw=0.5)
+                    if self._show_peak_labels:
+                        ax.annotate(f"φ={phi_pk:+.0f}", xy=(phi_pk, a_pk),
+                                    xytext=(-4, 8), textcoords="offset points",
+                                    fontsize=7, color="darkorange",
+                                    bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                              ec="darkorange", alpha=0.85, lw=0.5))
 
         norm_note = ("model scaled to data peak" if (has_data and normalise)
                      else f"model ×{model_scale:.3g}" if not normalise
