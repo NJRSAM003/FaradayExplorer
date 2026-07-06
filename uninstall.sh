@@ -3,10 +3,9 @@
 # Run from the repo:  bash uninstall.sh [conda_env_name]
 #
 # What it does (with confirmation at each step):
-#   1. Removes the desktop entry from your application menu
-#   2. Removes the installed app icon
-#   3. Removes the Qt settings cache (~/.config/AmaniAstro/)
-#   4. Removes the conda environment created by install.sh
+#   1. Removes the clickable launcher (.app bundle on macOS / .desktop on Linux)
+#   2. Removes the Qt settings cache
+#   3. Removes the conda environment created by install.sh
 #
 # What it does NOT do:
 #   - Delete the cloned repository directory (you do that with `rm -rf`)
@@ -15,12 +14,26 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_NAME="${1:-faraday_explorer}"
+OS="$(uname)"
+
+if [ "$OS" = "Darwin" ]; then
+    if [ -d "/Applications/FaradayExplorer.app" ]; then
+        APP_DIR="/Applications/FaradayExplorer.app"
+    else
+        APP_DIR="$HOME/Applications/FaradayExplorer.app"
+    fi
+    SETTINGS_PATH="$HOME/Library/Preferences/com.FaradayExplorer.FaradayExplorer.plist"
+    LAUNCHER_LABEL="App bundle : $APP_DIR"
+    SETTINGS_LABEL="Qt settings: $SETTINGS_PATH"
+else
+    LAUNCHER_LABEL="Desktop entry: ~/.local/share/applications/faraday_explorer.desktop"
+    SETTINGS_LABEL="Qt settings  : ~/.config/AmaniAstro/"
+fi
 
 echo "=== Faraday Explorer uninstaller ===================================="
 echo "Conda environment to remove : $ENV_NAME"
-echo "Desktop entry               : ~/.local/share/applications/faraday_explorer.desktop"
-echo "Icon                        : ~/.local/share/icons/hicolor/512x512/apps/faraday_explorer.png"
-echo "Qt settings cache           : ~/.config/AmaniAstro/"
+echo "$LAUNCHER_LABEL"
+echo "$SETTINGS_LABEL"
 echo "Repo directory ($SCRIPT_DIR) will NOT be deleted."
 echo "====================================================================="
 
@@ -30,22 +43,27 @@ case "$ans" in
     *) echo "Aborted."; exit 0 ;;
 esac
 
-# ── 1. Remove desktop entry ──────────────────────────────────────────────────
-echo "[1/4] Removing desktop entry..."
-rm -f "$HOME/.local/share/applications/faraday_explorer.desktop"
-update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+# ── 1. Remove launcher ───────────────────────────────────────────────────────
+echo "[1/3] Removing launcher..."
+if [ "$OS" = "Darwin" ]; then
+    rm -rf "$APP_DIR"
+else
+    rm -f "$HOME/.local/share/applications/faraday_explorer.desktop"
+    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    rm -f "$HOME/.local/share/icons/hicolor/512x512/apps/faraday_explorer.png"
+    gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
 
-# ── 2. Remove installed icon ─────────────────────────────────────────────────
-echo "[2/4] Removing app icon..."
-rm -f "$HOME/.local/share/icons/hicolor/512x512/apps/faraday_explorer.png"
-gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+# ── 2. Remove Qt settings cache ──────────────────────────────────────────────
+echo "[2/3] Removing settings cache..."
+if [ "$OS" = "Darwin" ]; then
+    rm -f "$SETTINGS_PATH"
+else
+    rm -rf "$HOME/.config/AmaniAstro"
+fi
 
-# ── 3. Remove Qt settings cache ──────────────────────────────────────────────
-echo "[3/4] Removing settings cache..."
-rm -rf "$HOME/.config/AmaniAstro"
-
-# ── 4. Remove conda env ──────────────────────────────────────────────────────
-echo "[4/4] Removing conda environment '$ENV_NAME'..."
+# ── 3. Remove conda env ──────────────────────────────────────────────────────
+echo "[3/3] Removing conda environment '$ENV_NAME'..."
 find_conda() {
     for p in \
         "$HOME/anaconda3" "$HOME/miniconda3" "$HOME/miniforge3" \
