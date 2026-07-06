@@ -2292,12 +2292,29 @@ class MainWindow(QMainWindow):
 
     def _on_aperture(self, mask, cx, cy, a, b, pa):
         n_pix = int(mask.sum())
-        ds = self.fdf_data[:, ::self.map_step, ::self.map_step]
-        self.real_fdf   = ds[:, mask].sum(axis=1).astype(np.float64)
+        ms    = self.map_step
+
+        # Show "computing…" in status bar immediately so the UI looks responsive.
+        self.statusBar().showMessage("Computing aperture FDF…")
+        QApplication.processEvents()
+
+        # FDF extraction — chunked over phi slabs so the main thread yields
+        # periodically on large cubes rather than blocking for seconds at a time.
+        ds     = self.fdf_data[:, ::ms, ::ms]
+        n_phi  = ds.shape[0]
+        slab   = max(1, min(20, n_phi))
+        sz     = max(1, (n_phi + slab - 1) // slab)
+        accum  = None
+        for s in range(0, n_phi, sz):
+            chunk = np.asarray(ds[s:s+sz, ...])[:, mask].sum(axis=1)
+            accum = chunk if accum is None else np.concatenate([accum, chunk])
+            QApplication.processEvents()
+        self.real_fdf = accum.astype(np.float64)
+
         pa_str = f"  PA={pa:.1f}°" if abs(pa) > 0.05 else ""
         bi = self.beam_info
         if bi and bi.get("pix_scale"):
-            ps    = bi["pix_scale"] * self.map_step
+            ps    = bi["pix_scale"] * ms
             a_arc = a * ps
             b_arc = b * ps
             bmaj  = bi.get("bmaj", 0)
@@ -2323,9 +2340,15 @@ class MainWindow(QMainWindow):
             self._model_scale_spin.blockSignals(False)
 
         if self.has_qu:
-            I_sum = self.i_data[:, ::self.map_step, ::self.map_step][:, mask].sum(axis=1).astype(np.float64)
-            Q_sum = self.q_data[:, ::self.map_step, ::self.map_step][:, mask].sum(axis=1).astype(np.float64)
-            U_sum = self.u_data[:, ::self.map_step, ::self.map_step][:, mask].sum(axis=1).astype(np.float64)
+            # Stokes extractions — each one a potentially large memmap read;
+            # call processEvents() between them so the UI stays alive.
+            QApplication.processEvents()
+            I_sum = np.asarray(self.i_data[:, ::ms, ::ms])[:, mask].sum(axis=1).astype(np.float64)
+            QApplication.processEvents()
+            Q_sum = np.asarray(self.q_data[:, ::ms, ::ms])[:, mask].sum(axis=1).astype(np.float64)
+            QApplication.processEvents()
+            U_sum = np.asarray(self.u_data[:, ::ms, ::ms])[:, mask].sum(axis=1).astype(np.float64)
+            QApplication.processEvents()
             safe = np.abs(I_sum) > 1e-10 * np.abs(I_sum).max()
             self.real_q = np.where(safe, Q_sum / I_sum, np.nan)
             self.real_u = np.where(safe, U_sum / I_sum, np.nan)
@@ -2503,7 +2526,31 @@ class MainWindow(QMainWindow):
                   fontsize=7.5, loc="upper right", framealpha=0.85)
 
         ax.grid(True, alpha=0.2)
-        ax.set_xlim(PHI_MIN, PHI_MAX)
+        # Auto-extend x-axis to include real data range.  If phi_data values
+        # look like frequencies (> 1e5) rather than rad/m² the data is likely
+        # from a frequency cube — warn once and use its range so at least the
+        # profile is visible.
+        if has_data and self.phi_data is not None:
+            dlo = float(np.nanmin(self.phi_data))
+            dhi = float(np.nanmax(self.phi_data))
+            if abs(dlo) > 1e5 or abs(dhi) > 1e5:
+                if not getattr(self, "_warned_phi_units", False):
+                    self._warned_phi_units = True
+                    from PyQt5.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self, "Unexpected φ axis",
+                        "The 3rd axis of the FDF cube has values outside the "
+                        "expected rad/m² range (got "
+                        f"{dlo:.3g} … {dhi:.3g}).\n\n"
+                        "This usually means a frequency cube was selected "
+                        "instead of the FDF output cube.  Check that the "
+                        "'FDF cube' field points to the RM-synthesis output "
+                        "(e.g. FDF_clean_tot.fits from rmsynth3d), not the "
+                        "continuum or frequency cube.",
+                    )
+            ax.set_xlim(min(PHI_MIN, dlo), max(PHI_MAX, dhi))
+        else:
+            ax.set_xlim(PHI_MIN, PHI_MAX)
         ax.set_ylim(0, 1.20 * ymax)
         self.fdf_fig.tight_layout()
         self.fdf_canvas.draw_idle()
