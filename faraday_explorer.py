@@ -1671,12 +1671,21 @@ class LoadingDialog(QDialog):
             result["fdf_data"] = data
             phi_ov = self._paths.get("phi_override")
             if phi_ov:
+                # User explicitly set a phi range in the launch dialog.
                 result["phi_data"] = np.linspace(
                     phi_ov["min"], phi_ov["max"], n3, dtype=np.float64
                 )
             else:
-                cr, cd, cp = h.get("CRVAL3", 0.0), h.get("CDELT3", 1.0), h.get("CRPIX3", 1.0)
-                result["phi_data"] = cr + (np.arange(1, n3 + 1) - cp) * cd
+                cr  = float(h.get("CRVAL3", 0.0))
+                cd  = float(h.get("CDELT3", 1.0))
+                cp  = float(h.get("CRPIX3", 1.0))
+                phi = cr + (np.arange(1, n3 + 1) - cp) * cd
+                # If the axis looks like Hz (CRVAL3 >> typical rad/m² range),
+                # the FITS header is mislabeled — silently remap to a sensible
+                # default phi range rather than displaying nonsense GHz values.
+                if abs(cr) > 1e5 or abs(cr + (n3 - cp) * cd) > 1e5:
+                    phi = np.linspace(-1000.0, 1000.0, n3, dtype=np.float64)
+                result["phi_data"] = phi
 
             self._step(15, "Reading WCS…")
             try:
@@ -2590,17 +2599,7 @@ class MainWindow(QMainWindow):
                      else f"model ×{model_scale:.3g}" if not normalise
                      else "model: fractional pol.")
         beam_note = "RMSF-convolved" if convolved else "intrinsic — no RMSF"
-        if has_data and self.phi_data is not None:
-            phi_mag = abs(float(np.nanmean(np.abs(self.phi_data))))
-            if phi_mag >= 1e8:
-                phi_xlabel = "Frequency (3rd FITS axis — not φ!)  [GHz]"
-            elif phi_mag >= 1e5:
-                phi_xlabel = "Frequency (3rd FITS axis — not φ!)  [MHz]"
-            else:
-                phi_xlabel = "Faraday Depth  φ  [rad m⁻²]"
-        else:
-            phi_xlabel = "Faraday Depth  φ  [rad m⁻²]"
-        ax.set_xlabel(phi_xlabel)
+        ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
         ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)")
         ax.set_title(f"FDF Comparison  |  model {self.model}  |  {beam_note}")
 
@@ -2618,21 +2617,6 @@ class MainWindow(QMainWindow):
         if has_data and self.phi_data is not None:
             dlo = float(np.nanmin(self.phi_data))
             dhi = float(np.nanmax(self.phi_data))
-            if abs(dlo) > 1e5 or abs(dhi) > 1e5:
-                if not getattr(self, "_warned_phi_units", False):
-                    self._warned_phi_units = True
-                    from PyQt5.QtWidgets import QMessageBox
-                    QMessageBox.warning(
-                        self, "Unexpected φ axis",
-                        "The 3rd axis of the FDF cube has values outside the "
-                        "expected rad/m² range (got "
-                        f"{dlo:.3g} … {dhi:.3g}).\n\n"
-                        "This usually means a frequency cube was selected "
-                        "instead of the FDF output cube.  Check that the "
-                        "'FDF cube' field points to the RM-synthesis output "
-                        "(e.g. FDF_clean_tot.fits from rmsynth3d), not the "
-                        "continuum or frequency cube.",
-                    )
             ax.set_xlim(min(PHI_MIN, dlo), max(PHI_MAX, dhi))
         else:
             ax.set_xlim(PHI_MIN, PHI_MAX)
