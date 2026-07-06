@@ -1785,6 +1785,21 @@ class MainWindow(QMainWindow):
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
+    def _sync_phi_grid(self):
+        """Extend the model phi grid and RMSF to cover the loaded phi_data range.
+
+        Called after phi_data is populated so that the blue model FDF and
+        the grey RMSF shading always span the full data extent.
+        """
+        if self.phi_data is not None and len(self.phi_data) > 1:
+            lo = min(PHI_MIN, float(self.phi_data.min()))
+            hi = max(PHI_MAX, float(self.phi_data.max()))
+        else:
+            lo, hi = PHI_MIN, PHI_MAX
+        self.phi  = np.linspace(lo, hi, N_PHI)
+        self.rmsf = np.abs(rm_synthesis(
+            np.ones(self.n_chan, dtype=complex), self.lam2, self.phi))
+
     def _inject_data(self, d):
         """Populate data attributes from a dict produced by _DataLoader."""
         self.fdf_data = d.get("fdf_data")
@@ -1797,6 +1812,7 @@ class MainWindow(QMainWindow):
             self.i_data = d.get("i_data")
             self.q_data = d.get("q_data")
             self.u_data = d.get("u_data")
+        self._sync_phi_grid()
         if self.has_data:
             print(f"  FDF: {self.fdf_data.shape}  φ: {self.phi_data[0]:.1f}…{self.phi_data[-1]:.1f}")
         if self.has_qu:
@@ -1812,7 +1828,11 @@ class MainWindow(QMainWindow):
         self.fdf_data = hdu[0].data
         h = hdu[0].header
         n3, cr, cd, cp = h["NAXIS3"], h["CRVAL3"], h["CDELT3"], h["CRPIX3"]
-        self.phi_data = cr + (np.arange(1, n3+1) - cp) * cd
+        phi = cr + (np.arange(1, n3+1) - cp) * cd
+        if abs(cr) > 1e5 or abs(phi[-1]) > 1e5:
+            phi = np.linspace(-1000.0, 1000.0, n3, dtype=np.float64)
+        self.phi_data = phi
+        self._sync_phi_grid()
 
         # Build a 2-D celestial WCS from the FDF header for pixel → RA/Dec
         self.wcs2d = None
