@@ -388,10 +388,15 @@ class CompactNavToolbar(NavToolbar):
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent)
         from PyQt5.QtCore import QSize
-        # Scale down icon size to 16x16 pixels
-        self.setIconSize(QSize(16, 16))
-        # Reduce toolbar height
-        self.setFixedHeight(24)
+        # Scale down icon size to 14x14 pixels with proper margins
+        self.setIconSize(QSize(14, 14))
+        # Reduce toolbar height with padding
+        self.setFixedHeight(22)
+        # Set stylesheet to reduce padding around buttons
+        self.setStyleSheet(
+            "QToolBar { padding: 1px; margin: 0px; border: none; }"
+            "QToolButton { padding: 2px; margin: 0px; border: none; }"
+        )
 
 
 # ── ParamWidget: slider + spinbox + editable min/max ─────────────────────────
@@ -3472,12 +3477,12 @@ class MainWindow(QMainWindow):
 
         ax.set_xlabel("Frequency  [GHz]")
         ax.set_ylabel("Fractional polarisation  (Q/I,  U/I)")
-        ax.set_title(f"q & u vs Frequency  |  model {self.model}")
-        # Place legend above plot in horizontal orientation to avoid obscuring data
-        ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, 1.12),
-                 ncol=4, framealpha=0.9, frameon=True)
+        ax.set_title(f"q & u vs Frequency  |  model {self.model}", loc="left", pad=8)
+        # Place legend on right side outside plot area to avoid obscuring data/title
+        ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.05, 0.5),
+                 ncol=1, framealpha=0.9, frameon=True, borderpad=0.5)
         ax.grid(True, alpha=0.2)
-        self.qu_fig.tight_layout()
+        self.qu_fig.subplots_adjust(right=0.75)  # Make room for legend on right
         self.qu_canvas.draw_idle()
 
     def _draw_fdf(self, amp, amax):
