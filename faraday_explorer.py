@@ -388,15 +388,10 @@ class CompactNavToolbar(NavToolbar):
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent)
         from PyQt5.QtCore import QSize
-        # Scale down icon size to 14x14 pixels with proper margins
-        self.setIconSize(QSize(14, 14))
-        # Reduce toolbar height with padding
-        self.setFixedHeight(22)
-        # Set stylesheet to reduce padding around buttons
-        self.setStyleSheet(
-            "QToolBar { padding: 1px; margin: 0px; border: none; }"
-            "QToolButton { padding: 2px; margin: 0px; border: none; }"
-        )
+        # Use standard 22x22 icon size (looks correct on macOS)
+        self.setIconSize(QSize(22, 22))
+        # Reduce toolbar height slightly
+        self.setFixedHeight(28)
 
 
 # ── ParamWidget: slider + spinbox + editable min/max ─────────────────────────
@@ -2836,6 +2831,7 @@ class MainWindow(QMainWindow):
         grp.setFont(QFont("", 9, QFont.Bold))
         g = QVBoxLayout(grp)
         self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(80)
         self.model_combo.addItems(list(MODEL_PARAMS.keys()))
         self.model_combo.currentTextChanged.connect(self._on_model)
         g.addWidget(self.model_combo)
@@ -3037,6 +3033,7 @@ class MainWindow(QMainWindow):
 
         hbox2.addWidget(QLabel("Axes:"))
         self._map_axes_cb = QComboBox()
+        self._map_axes_cb.setMinimumWidth(100)
         self._map_axes_cb.addItem("Pixel",     "pixel")
         self._map_axes_cb.addItem("WCS (deg)", "wcs_deg")
         self._map_axes_cb.addItem("WCS (hms)", "wcs_hms")
@@ -3047,6 +3044,7 @@ class MainWindow(QMainWindow):
 
         hbox2.addWidget(QLabel("Cmap:"))
         self._map_cmap_cb = QComboBox()
+        self._map_cmap_cb.setMinimumWidth(100)
         for cm in ("inferno", "viridis", "plasma", "magma",
                    "cividis", "gray", "hot", "RdBu_r"):
             self._map_cmap_cb.addItem(cm)
