@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
     QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
-    QToolButton, QMenu, QAction, QActionGroup,
+    QToolButton, QMenu, QAction, QActionGroup, QInputDialog,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QLocale
@@ -2084,6 +2084,68 @@ class LaunchDialog(QDialog):
 
 # ── Loading progress dialog ───────────────────────────────────────────────────
 
+# ── Workspace management ──────────────────────────────────────────────────────
+
+class Workspace:
+    """Saves and loads analysis state (model, parameters, settings)."""
+
+    @staticmethod
+    def get_workspace_dir(fdf_path):
+        """Return workspace directory for a FDF file."""
+        ws_dir = fdf_path + ".workspaces"
+        return ws_dir
+
+    @staticmethod
+    def list_workspaces(fdf_path):
+        """List all saved workspaces for a FDF file."""
+        ws_dir = Workspace.get_workspace_dir(fdf_path)
+        if not os.path.exists(ws_dir):
+            return []
+        return sorted([f for f in os.listdir(ws_dir) if f.endswith('.json')])
+
+    @staticmethod
+    def save_workspace(fdf_path, name, model, params, settings):
+        """Save current workspace."""
+        ws_dir = Workspace.get_workspace_dir(fdf_path)
+        os.makedirs(ws_dir, exist_ok=True)
+
+        ws_file = os.path.join(ws_dir, f"{name}.json")
+        data = {
+            "name": name,
+            "model": model,
+            "params": params,
+            "settings": settings,
+        }
+        try:
+            with open(ws_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            return True, f"Workspace '{name}' saved."
+        except Exception as e:
+            return False, f"Error saving workspace: {e}"
+
+    @staticmethod
+    def load_workspace(fdf_path, name):
+        """Load a saved workspace."""
+        ws_dir = Workspace.get_workspace_dir(fdf_path)
+        ws_file = os.path.join(ws_dir, f"{name}.json")
+        try:
+            with open(ws_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            return None
+
+    @staticmethod
+    def delete_workspace(fdf_path, name):
+        """Delete a saved workspace."""
+        ws_dir = Workspace.get_workspace_dir(fdf_path)
+        ws_file = os.path.join(ws_dir, f"{name}.json")
+        try:
+            os.remove(ws_file)
+            return True
+        except Exception:
+            return False
+
+
 # ── Peak map caching ──────────────────────────────────────────────────────────
 
 def _get_peak_cache_path(fdf_path):
@@ -2303,6 +2365,7 @@ class MainWindow(QMainWindow):
         self.has_data = self.has_qu = False
         self.map_step  = map_step
         self.beam_info = beam_info  # dict or None
+        self._fdf_path = fits_path  # Store for workspace management
         if _preloaded is not None:
             self._inject_data(_preloaded)
         else:
@@ -2459,6 +2522,18 @@ class MainWindow(QMainWindow):
         open_act.setShortcut("Ctrl+O")
         open_act.triggered.connect(self._open_new)
         fmenu.addSeparator()
+
+        # Workspace submenu
+        ws_menu = fmenu.addMenu("Workspaces")
+        save_ws_act = ws_menu.addAction("Save workspace…")
+        save_ws_act.triggered.connect(self._save_workspace_dialog)
+        load_ws_act = ws_menu.addAction("Load workspace…")
+        load_ws_act.triggered.connect(self._load_workspace_dialog)
+        ws_menu.addSeparator()
+        manage_ws_act = ws_menu.addAction("Manage workspaces…")
+        manage_ws_act.triggered.connect(self._manage_workspaces_dialog)
+
+        fmenu.addSeparator()
         fmenu.addAction("Quit").triggered.connect(self.close)
 
         # ── View menu — lets user reopen any closed panel ─────────────────────
@@ -2596,6 +2671,113 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(self._qu_dock, self._fdf_dock, Qt.Vertical)
 
         QTimer.singleShot(0, self._apply_default_sizes)
+
+    def _get_current_workspace_data(self):
+        """Capture current model and parameter state."""
+        n = len(MODEL_PARAMS[self.model])
+        params = [self._param_widgets[i].value() for i in range(n)]
+        return {
+            "model": self.model,
+            "params": params,
+            "normalise": self._normalise_cb.isChecked(),
+            "convolve": self._convolve_cb.isChecked(),
+            "model_scale": self._model_scale_spin.value(),
+        }
+
+    def _apply_workspace_data(self, ws_data):
+        """Restore model and parameter state from workspace."""
+        if not ws_data:
+            return
+
+        self._on_model(ws_data.get("model", "m1"))
+
+        params = ws_data.get("params", [])
+        for i, val in enumerate(params):
+            if i < len(self._param_widgets):
+                self._param_widgets[i].spin.setValue(float(val))
+
+        self._normalise_cb.setChecked(ws_data.get("normalise", True))
+        self._convolve_cb.setChecked(ws_data.get("convolve", True))
+        self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
+        self._update()
+
+    def _save_workspace_dialog(self):
+        """Show dialog to save current workspace."""
+        if not self.has_data:
+            QMessageBox.warning(self, "No Data", "Load a dataset first.")
+            return
+
+        name, ok = QInputDialog.getText(
+            self, "Save Workspace", "Enter workspace name:", QLineEdit.Normal
+        )
+        if not ok or not name.strip():
+            return
+
+        name = name.strip()
+        ws_data = self._get_current_workspace_data()
+        success, msg = Workspace.save_workspace(
+            self._fdf_path, name, ws_data["model"], ws_data["params"],
+            {k: v for k, v in ws_data.items() if k not in ["model", "params"]}
+        )
+        if success:
+            QMessageBox.information(self, "Success", msg)
+        else:
+            QMessageBox.critical(self, "Error", msg)
+
+    def _load_workspace_dialog(self):
+        """Show dialog to load a saved workspace."""
+        if not self.has_data:
+            QMessageBox.warning(self, "No Data", "Load a dataset first.")
+            return
+
+        workspaces = Workspace.list_workspaces(self._fdf_path)
+        if not workspaces:
+            QMessageBox.information(self, "No Workspaces",
+                                  "No saved workspaces for this dataset.")
+            return
+
+        ws_names = [w.replace('.json', '') for w in workspaces]
+        name, ok = QInputDialog.getItem(
+            self, "Load Workspace", "Select workspace:", ws_names, 0, False
+        )
+        if not ok:
+            return
+
+        ws_data = Workspace.load_workspace(self._fdf_path, name)
+        if ws_data:
+            self._apply_workspace_data(ws_data)
+            QMessageBox.information(self, "Success", f"Workspace '{name}' loaded.")
+        else:
+            QMessageBox.critical(self, "Error", "Failed to load workspace.")
+
+    def _manage_workspaces_dialog(self):
+        """Show dialog to manage (delete) workspaces."""
+        if not self.has_data:
+            QMessageBox.warning(self, "No Data", "Load a dataset first.")
+            return
+
+        workspaces = Workspace.list_workspaces(self._fdf_path)
+        if not workspaces:
+            QMessageBox.information(self, "No Workspaces",
+                                  "No saved workspaces for this dataset.")
+            return
+
+        ws_names = [w.replace('.json', '') for w in workspaces]
+        name, ok = QInputDialog.getItem(
+            self, "Delete Workspace", "Select workspace to delete:", ws_names, 0, False
+        )
+        if not ok:
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete", f"Delete workspace '{name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            if Workspace.delete_workspace(self._fdf_path, name):
+                QMessageBox.information(self, "Success", f"Workspace '{name}' deleted.")
+            else:
+                QMessageBox.critical(self, "Error", "Failed to delete workspace.")
 
     def _build_controls(self):
         panel = QWidget()
@@ -3250,7 +3432,9 @@ class MainWindow(QMainWindow):
         ax.set_xlabel("Frequency  [GHz]")
         ax.set_ylabel("Fractional polarisation  (Q/I,  U/I)")
         ax.set_title(f"q & u vs Frequency  |  model {self.model}")
-        ax.legend(fontsize=8, loc="upper right", framealpha=0.85)
+        # Place legend above plot in horizontal orientation to avoid obscuring data
+        ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, 1.12),
+                 ncol=4, framealpha=0.9, frameon=True)
         ax.grid(True, alpha=0.2)
         self.qu_fig.tight_layout()
         self.qu_canvas.draw_idle()
