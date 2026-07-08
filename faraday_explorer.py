@@ -2935,7 +2935,7 @@ class MainWindow(QMainWindow):
         self.qu_fig    = Figure(facecolor="#fafafa")
         self.qu_canvas = FigureCanvas(self.qu_fig)
         self.qu_ax     = self.qu_fig.add_subplot(111)
-        v.addWidget(NavToolbar(self.qu_canvas, holder))
+        v.addWidget(CompactNavToolbar(self.qu_canvas, holder))
         v.addWidget(self.qu_canvas)
         return holder
 
@@ -3054,6 +3054,7 @@ class MainWindow(QMainWindow):
 
         hbox2.addWidget(QLabel("Clip:"))
         self._map_clip_cb = QComboBox()
+        self._map_clip_cb.setMinimumWidth(80)  # Ensure full text visibility
         for pct in (99.5, 99.0, 95.0, 99.9, 99.95, 99.99, 100.0):
             self._map_clip_cb.addItem(f"{pct}%", pct)
         hbox2.addWidget(self._map_clip_cb)
@@ -3478,11 +3479,11 @@ class MainWindow(QMainWindow):
         ax.set_xlabel("Frequency  [GHz]")
         ax.set_ylabel("Fractional polarisation  (Q/I,  U/I)")
         ax.set_title(f"q & u vs Frequency  |  model {self.model}", loc="left", pad=8)
-        # Place legend on right side outside plot area to avoid obscuring data/title
-        ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.05, 0.5),
-                 ncol=1, framealpha=0.9, frameon=True, borderpad=0.5)
+        # Place legend at top right above plot, horizontal orientation (multiple columns)
+        ax.legend(fontsize=8, loc="upper right", bbox_to_anchor=(1.0, 1.15),
+                 ncol=4, framealpha=0.9, frameon=True, borderpad=0.8)
         ax.grid(True, alpha=0.2)
-        self.qu_fig.subplots_adjust(right=0.75)  # Make room for legend on right
+        self.qu_fig.subplots_adjust(top=0.80)  # Make room for legend at top
         self.qu_canvas.draw_idle()
 
     def _draw_fdf(self, amp, amax):
