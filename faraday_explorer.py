@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QScrollArea, QFrame, QSizePolicy, QStatusBar,
     QDialog, QFormLayout, QPushButton, QFileDialog,
     QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
-    QToolButton, QMenu, QAction,
+    QToolButton, QMenu, QAction, QActionGroup,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
@@ -314,6 +314,31 @@ class Theme:
         "param_highlight_label": "#a0d0c0",   # Light teal text
         "slider_groove": "#1e5c46",            # Darker teal for groove
         "slider_handle": "#00c896",            # Bright teal for handle
+        "stylesheet": """
+            QMainWindow, QDialog, QWidget { background-color: #1e1e1e; color: #e0e0e0; }
+            QMenuBar { background-color: #252525; color: #e0e0e0; border-bottom: 1px solid #333; }
+            QMenuBar::item:selected { background-color: #3a3a3a; }
+            QMenu { background-color: #252525; color: #e0e0e0; border: 1px solid #333; }
+            QMenu::item:selected { background-color: #3a3a3a; }
+            QToolBar { background-color: #252525; border: none; }
+            QDockWidget { color: #e0e0e0; }
+            QDockWidget::title { background-color: #252525; padding: 3px; }
+            QLabel { color: #e0e0e0; }
+            QLineEdit, QTextEdit { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; }
+            QComboBox { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; }
+            QComboBox::drop-down { border: none; }
+            QPushButton { background-color: #0d47a1; color: #fff; border: 1px solid #0d47a1; padding: 4px; border-radius: 3px; }
+            QPushButton:hover { background-color: #1565c0; }
+            QPushButton:pressed { background-color: #0d3f8f; }
+            QSpinBox, QDoubleSpinBox { background-color: #2a2a2a; color: #e0e0e0; border: 1px solid #444; }
+            QSlider::groove:horizontal { background-color: #444; border-radius: 2px; }
+            QSlider::handle:horizontal { background-color: #0d47a1; border-radius: 5px; width: 12px; }
+            QGroupBox { color: #e0e0e0; border: 1px solid #444; border-radius: 3px; margin-top: 8px; padding-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
+            QScrollArea { background-color: #1e1e1e; }
+            QFrame { background-color: #1e1e1e; color: #e0e0e0; }
+            QStatusBar { background-color: #252525; color: #e0e0e0; border-top: 1px solid #333; }
+        """
     }
 
     LIGHT = {
@@ -322,6 +347,31 @@ class Theme:
         "param_highlight_label": "#1b5e20",   # Dark green text
         "slider_groove": "#c8e6c9",            # Medium green for groove
         "slider_handle": "#2e7d32",            # Dark green for handle
+        "stylesheet": """
+            QMainWindow, QDialog, QWidget { background-color: #f5f5f5; color: #212121; }
+            QMenuBar { background-color: #fafafa; color: #212121; border-bottom: 1px solid #e0e0e0; }
+            QMenuBar::item:selected { background-color: #eeeeee; }
+            QMenu { background-color: #fafafa; color: #212121; border: 1px solid #e0e0e0; }
+            QMenu::item:selected { background-color: #eeeeee; }
+            QToolBar { background-color: #fafafa; border: none; }
+            QDockWidget { color: #212121; }
+            QDockWidget::title { background-color: #fafafa; padding: 3px; }
+            QLabel { color: #212121; }
+            QLineEdit, QTextEdit { background-color: #ffffff; color: #212121; border: 1px solid #bdbdbd; }
+            QComboBox { background-color: #ffffff; color: #212121; border: 1px solid #bdbdbd; }
+            QComboBox::drop-down { border: none; }
+            QPushButton { background-color: #1976d2; color: #fff; border: 1px solid #1976d2; padding: 4px; border-radius: 3px; }
+            QPushButton:hover { background-color: #1565c0; }
+            QPushButton:pressed { background-color: #1155cc; }
+            QSpinBox, QDoubleSpinBox { background-color: #ffffff; color: #212121; border: 1px solid #bdbdbd; }
+            QSlider::groove:horizontal { background-color: #bdbdbd; border-radius: 2px; }
+            QSlider::handle:horizontal { background-color: #1976d2; border-radius: 5px; width: 12px; }
+            QGroupBox { color: #212121; border: 1px solid #bdbdbd; border-radius: 3px; margin-top: 8px; padding-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }
+            QScrollArea { background-color: #f5f5f5; }
+            QFrame { background-color: #f5f5f5; color: #212121; }
+            QStatusBar { background-color: #fafafa; color: #212121; border-top: 1px solid #e0e0e0; }
+        """
     }
 
     @staticmethod
@@ -2247,6 +2297,10 @@ class MainWindow(QMainWindow):
         # ── Build UI ──────────────────────────────────────────────────────────
         self._build_ui()
 
+        # ── Apply theme ───────────────────────────────────────────────────────
+        theme_dict = Theme.get_theme(self.theme)
+        QApplication.instance().setStyleSheet(theme_dict["stylesheet"])
+
         # ── Update once to initialise plots ──────────────────────────────────
         self._update()
 
@@ -2402,17 +2456,22 @@ class MainWindow(QMainWindow):
         view.addAction(self._fdf_dock.toggleViewAction())
         view.addSeparator()
 
-        # Theme submenu
+        # Theme submenu with mutually exclusive actions
         theme_menu = view.addMenu("Theme")
+        self._theme_action_group = QActionGroup(theme_menu)
+        self._theme_action_group.setExclusive(True)
+
         dark_act = theme_menu.addAction("Dark")
         dark_act.setCheckable(True)
         dark_act.setChecked(self.theme == "dark")
         dark_act.triggered.connect(lambda: self.set_theme("dark"))
+        self._theme_action_group.addAction(dark_act)
 
         light_act = theme_menu.addAction("Light")
         light_act.setCheckable(True)
         light_act.setChecked(self.theme == "light")
         light_act.triggered.connect(lambda: self.set_theme("light"))
+        self._theme_action_group.addAction(light_act)
 
         view.addSeparator()
         restore = view.addAction("Restore default layout")
@@ -2930,9 +2989,18 @@ class MainWindow(QMainWindow):
             pw.set_highlighted(False)
 
     def set_theme(self, theme_name):
-        """Change the application theme."""
+        """Change the application theme and apply stylesheet."""
         self.theme = theme_name
         self.settings.setValue("theme", theme_name)
+
+        # Apply stylesheet to entire app
+        theme_dict = Theme.get_theme(theme_name)
+        QApplication.instance().setStyleSheet(theme_dict["stylesheet"])
+
+        # Update theme menu checkmarks
+        if hasattr(self, "_theme_action_group"):
+            for action in self._theme_action_group.actions():
+                action.setChecked(action.text().lower() == theme_name.lower())
 
     def _get_vals(self):
         n = len(MODEL_PARAMS[self.model])
