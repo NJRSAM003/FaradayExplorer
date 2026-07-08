@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QToolButton, QMenu, QAction, QActionGroup,
 )
 from PyQt5.QtWidgets import QSplashScreen
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QLocale
 from PyQt5.QtGui import QFont, QPixmap, QImage
 
 # Two-phase splash: branding video → app-name video.
@@ -417,6 +417,7 @@ class ParamWidget(QFrame):
         self._lbl.setMinimumWidth(110)
 
         self.spin = QDoubleSpinBox()
+        self.spin.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))  # Use period as decimal
         self.spin.setDecimals(4)
         self.spin.setRange(vmin, vmax)
         self.spin.setValue(vinit)
@@ -450,6 +451,9 @@ class ParamWidget(QFrame):
         self.min_edit.returnPressed.connect(self._apply_min)
         self.max_edit.returnPressed.connect(self._apply_max)
 
+        # Convert commas to periods in spinbox input
+        self.spin.lineEdit().textChanged.connect(self._convert_comma_to_period)
+
     # ── internal helpers ──────────────────────────────────────────────────────
     def _to_sl(self, v):
         r = self._vmax - self._vmin
@@ -471,6 +475,16 @@ class ParamWidget(QFrame):
         self.slider.setValue(self._to_sl(v))
         self._guard = False
         self.valueChanged.emit()
+
+    def _convert_comma_to_period(self, text):
+        """Convert commas to periods in spinbox input for user convenience."""
+        if "," in text:
+            cursor_pos = self.spin.lineEdit().cursorPosition()
+            new_text = text.replace(",", ".")
+            self.spin.lineEdit().blockSignals(True)
+            self.spin.lineEdit().setText(new_text)
+            self.spin.lineEdit().setCursorPosition(cursor_pos)
+            self.spin.lineEdit().blockSignals(False)
 
     def _apply_min(self):
         try:
