@@ -303,6 +303,33 @@ def _gaussian_restore(intrinsic_amp, phi, rmsf):
     return np.convolve(intrinsic_amp, kernel, mode='same')
 
 
+# ── Theme management ──────────────────────────────────────────────────────────
+
+class Theme:
+    """Color scheme definitions for dark/light modes."""
+
+    DARK = {
+        "name": "Dark",
+        "param_highlight_bg": "#2a4a3a",      # Dark teal
+        "param_highlight_label": "#a0d0c0",   # Light teal text
+        "slider_groove": "#1e5c46",            # Darker teal for groove
+        "slider_handle": "#00c896",            # Bright teal for handle
+    }
+
+    LIGHT = {
+        "name": "Light",
+        "param_highlight_bg": "#e8f5e9",      # Light green
+        "param_highlight_label": "#1b5e20",   # Dark green text
+        "slider_groove": "#c8e6c9",            # Medium green for groove
+        "slider_handle": "#2e7d32",            # Dark green for handle
+    }
+
+    @staticmethod
+    def get_theme(name="dark"):
+        """Get theme by name."""
+        return Theme.DARK if name.lower() == "dark" else Theme.LIGHT
+
+
 # ── CompactNavToolbar: matplotlib toolbar with smaller icons ───────────────────
 
 class CompactNavToolbar(NavToolbar):
@@ -421,16 +448,18 @@ class ParamWidget(QFrame):
     def value(self):
         return self.spin.value()
 
-    def set_highlighted(self, highlighted=True):
+    def set_highlighted(self, highlighted=True, theme="dark"):
         """Highlight this parameter widget when selected/editing."""
         if highlighted:
+            t = Theme.get_theme(theme)
             self.setStyleSheet(
-                "QFrame { background-color: #e8e8e8; border-radius: 3px; }"
-                "QLabel { font-weight: bold; }"
+                f"QFrame {{ background-color: {t['param_highlight_bg']}; border-radius: 3px; }}"
+                f"QLabel {{ font-weight: bold; color: {t['param_highlight_label']}; }}"
             )
             self.slider.setStyleSheet(
-                "QSlider::groove:horizontal { background-color: #4a90e2; height: 6px; }"
-                "QSlider::handle:horizontal { background-color: #2563eb; border: 1px solid #1e40af; }"
+                f"QSlider::groove:horizontal {{ background-color: {t['slider_groove']}; height: 6px; }}"
+                f"QSlider::handle:horizontal {{ background-color: {t['slider_handle']}; "
+                f"border: 1px solid {t['slider_handle']}; width: 12px; margin: -3px 0; border-radius: 6px; }}"
             )
         else:
             self.setStyleSheet("")
@@ -2183,6 +2212,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
 
+        # ── Theme setup ───────────────────────────────────────────────────────
+        self.settings = QSettings("amani", "FaradayExplorer")
+        self.theme = self.settings.value("theme", "dark")  # default to dark
+
         # ── Physics setup ─────────────────────────────────────────────────────
         self.freqs  = freqs
         self.lam2   = make_lambda2(freqs)
@@ -2367,6 +2400,20 @@ class MainWindow(QMainWindow):
             view.addAction(self._map_dock.toggleViewAction())
         view.addAction(self._qu_dock.toggleViewAction())
         view.addAction(self._fdf_dock.toggleViewAction())
+        view.addSeparator()
+
+        # Theme submenu
+        theme_menu = view.addMenu("Theme")
+        dark_act = theme_menu.addAction("Dark")
+        dark_act.setCheckable(True)
+        dark_act.setChecked(self.theme == "dark")
+        dark_act.triggered.connect(lambda: self.set_theme("dark"))
+
+        light_act = theme_menu.addAction("Light")
+        light_act.setCheckable(True)
+        light_act.setChecked(self.theme == "light")
+        light_act.triggered.connect(lambda: self.set_theme("light"))
+
         view.addSeparator()
         restore = view.addAction("Restore default layout")
         restore.triggered.connect(self._restore_layout)
@@ -2868,12 +2915,12 @@ class MainWindow(QMainWindow):
         """Highlight a parameter when user interacts with its slider."""
         self._unhighlight_all_params()
         if idx < len(self._param_widgets):
-            self._param_widgets[idx].set_highlighted(True)
+            self._param_widgets[idx].set_highlighted(True, theme=self.theme)
 
     def _on_param_focus(self, idx, pw, event):
         """Handle focus in on parameter spinbox."""
         self._unhighlight_all_params()
-        pw.set_highlighted(True)
+        pw.set_highlighted(True, theme=self.theme)
         # Call original focusInEvent
         pw.spin.focusInEvent.__wrapped__(event) if hasattr(pw.spin.focusInEvent, '__wrapped__') else None
 
@@ -2881,6 +2928,11 @@ class MainWindow(QMainWindow):
         """Remove highlighting from all parameters."""
         for pw in self._param_widgets:
             pw.set_highlighted(False)
+
+    def set_theme(self, theme_name):
+        """Change the application theme."""
+        self.theme = theme_name
+        self.settings.setValue("theme", theme_name)
 
     def _get_vals(self):
         n = len(MODEL_PARAMS[self.model])
