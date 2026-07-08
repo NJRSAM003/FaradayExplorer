@@ -303,6 +303,20 @@ def _gaussian_restore(intrinsic_amp, phi, rmsf):
     return np.convolve(intrinsic_amp, kernel, mode='same')
 
 
+# ── CompactNavToolbar: matplotlib toolbar with smaller icons ───────────────────
+
+class CompactNavToolbar(NavToolbar):
+    """NavToolbar with smaller icons for better space utilization."""
+
+    def __init__(self, canvas, parent=None):
+        super().__init__(canvas, parent)
+        from PyQt5.QtCore import QSize
+        # Scale down icon size to 16x16 pixels
+        self.setIconSize(QSize(16, 16))
+        # Reduce toolbar height
+        self.setFixedHeight(24)
+
+
 # ── ParamWidget: slider + spinbox + editable min/max ─────────────────────────
 
 class ParamWidget(QFrame):
@@ -406,6 +420,21 @@ class ParamWidget(QFrame):
     # ── public API ────────────────────────────────────────────────────────────
     def value(self):
         return self.spin.value()
+
+    def set_highlighted(self, highlighted=True):
+        """Highlight this parameter widget when selected/editing."""
+        if highlighted:
+            self.setStyleSheet(
+                "QFrame { background-color: #e8e8e8; border-radius: 3px; }"
+                "QLabel { font-weight: bold; }"
+            )
+            self.slider.setStyleSheet(
+                "QSlider::groove:horizontal { background-color: #4a90e2; height: 6px; }"
+                "QSlider::handle:horizontal { background-color: #2563eb; border: 1px solid #1e40af; }"
+            )
+        else:
+            self.setStyleSheet("")
+            self.slider.setStyleSheet("")
 
     def reconfigure(self, label, vmin, vmax, vinit):
         self._guard = True
@@ -881,7 +910,7 @@ class MapCanvas(FigureCanvas):
         self._ny, self._nx = peak_map.shape
 
         # ── Interaction state ─────────────────────────────────────────────────
-        # States: idle | panning | aperture_wait | aperture_drawing
+        # States: idle | panning | aperture_wait | aperture_drawing | aperture_dragging
         self._state      = "idle"
         self._pan_ref    = None   # (canvas_x, canvas_y) at pan start
         self._xlim0      = None   # axes limits at pan start
@@ -893,6 +922,7 @@ class MapCanvas(FigureCanvas):
         self._patch             = None
         self._marker            = None
         self._aperture_finalised = False
+        self._aperture_locked   = False  # if True, aperture cannot be moved
         self._pix_scale_ds      = None  # arcsec / downsampled-pixel (set by MainWindow)
 
         self.mpl_connect("button_press_event",   self._on_press)
@@ -940,6 +970,11 @@ class MapCanvas(FigureCanvas):
                 # Place centre marker; button still held → enter drawing immediately
                 self._place_centre(ev.xdata, ev.ydata)
                 self._state = "aperture_drawing"
+            elif self._aperture_finalised and not self._aperture_locked and self._inside_aperture(ev.xdata, ev.ydata):
+                # Single-click inside unlocked aperture → drag to move it
+                self._state = "aperture_dragging"
+                self._pan_ref = (ev.xdata, ev.ydata)
+                self.setCursor(Qt.ClosedHandCursor)
             elif self._state == "aperture_wait":
                 # Single press after centre set → start drawing
                 self._state = "aperture_drawing"
@@ -958,6 +993,8 @@ class MapCanvas(FigureCanvas):
             self._do_pan(ev.x, ev.y)
         elif self._state == "aperture_drawing" and ev.inaxes == self.ax:
             self._update_ellipse(ev.xdata, ev.ydata)
+        elif self._state == "aperture_dragging" and ev.inaxes == self.ax and self._pan_ref is not None:
+            self._drag_aperture(ev.xdata, ev.ydata)
 
     # ── Release ───────────────────────────────────────────────────────────────
 
@@ -966,6 +1003,11 @@ class MapCanvas(FigureCanvas):
             if self._state == "panning":
                 self._state = "idle"
                 self.unsetCursor()
+
+            elif self._state == "aperture_dragging":
+                self._state = "idle"
+                self.unsetCursor()
+                self._emit_aperture_from_patch()
 
             elif self._state == "aperture_drawing":
                 # Check if mouse actually moved (distinguish click from drag)
@@ -1025,6 +1067,18 @@ class MapCanvas(FigureCanvas):
             (self._apert_cx, self._apert_cy), width=2*a, height=2*b,
             fill=False, edgecolor="cyan", lw=1.5, ls="--", zorder=5)
         self.ax.add_patch(self._patch)
+        self.draw_idle()
+
+    def _drag_aperture(self, x, y):
+        """Drag the finalized aperture to a new position."""
+        if self._patch is None or self._pan_ref is None:
+            return
+        dx = x - self._pan_ref[0]
+        dy = y - self._pan_ref[1]
+        self._pan_ref = (x, y)
+
+        cx, cy = self._patch.center
+        self._patch.set_center((cx + dx, cy + dy))
         self.draw_idle()
 
     def _finalise_aperture(self, x, y):
@@ -1094,10 +1148,23 @@ class MapCanvas(FigureCanvas):
         self.draw_idle()
         self._emit_aperture_from_patch()
 
+    def toggle_aperture_lock(self):
+        """Toggle aperture lock state (locked = immovable, unlocked = draggable)."""
+        if self._aperture_finalised:
+            self._aperture_locked = not self._aperture_locked
+            # Change patch edge color to indicate lock state
+            if self._patch:
+                color = "#ccaa00" if self._aperture_locked else "cyan"
+                self._patch.set_edgecolor(color)
+                self.draw_idle()
+            return self._aperture_locked
+        return self._aperture_locked
+
     def _clear_aperture(self):
         if self._patch:  self._patch.remove();  self._patch  = None
         if self._marker: self._marker.remove(); self._marker = None
         self._aperture_finalised = False
+        self._aperture_locked = False
         self._apert_cx = self._apert_cy = None
         self._state = "idle"
         self.draw_idle()
@@ -2398,6 +2465,9 @@ class MainWindow(QMainWindow):
             lbl, vmin, vmax, vinit = ("—", 0, 1, 0)
             pw = ParamWidget(lbl, vmin, vmax, vinit)
             pw.valueChanged.connect(self._schedule_update)
+            # Connect slider/spinbox interactions to highlight
+            pw.slider.sliderPressed.connect(lambda idx=i: self._highlight_param(idx))
+            pw.spin.focusInEvent = lambda ev, idx=i, pw=pw: self._on_param_focus(idx, pw, ev)
             self._param_layout.addWidget(pw)
             self._param_widgets.append(pw)
         self._param_layout.addStretch()
@@ -2481,7 +2551,7 @@ class MainWindow(QMainWindow):
         toolbar_row = QHBoxLayout()
         toolbar_row.setContentsMargins(0, 0, 0, 0)
         toolbar_row.setSpacing(0)
-        toolbar_row.addWidget(NavToolbar(self.fdf_canvas, holder))
+        toolbar_row.addWidget(CompactNavToolbar(self.fdf_canvas, holder))
 
         display_btn = QToolButton()
         display_btn.setText("Display ▾")
@@ -2601,6 +2671,13 @@ class MainWindow(QMainWindow):
         coord_btn.setToolTip("Enter aperture center and dimensions via coordinates")
         coord_btn.clicked.connect(self._open_coordinate_aperture)
         hbox3.addWidget(coord_btn)
+
+        self._aperture_lock_btn = QPushButton("🔓")
+        self._aperture_lock_btn.setFixedWidth(40)
+        self._aperture_lock_btn.setToolTip("Lock/unlock aperture for dragging (click to toggle)\n🔓 = Unlocked (can drag), 🔒 = Locked (fixed)")
+        self._aperture_lock_btn.setEnabled(False)
+        self._aperture_lock_btn.clicked.connect(self._toggle_aperture_lock)
+        hbox3.addWidget(self._aperture_lock_btn)
         hbox3.addStretch()
 
         vbox.addWidget(ctrl3)
@@ -2731,6 +2808,26 @@ class MainWindow(QMainWindow):
                 pw.setVisible(True)
             else:
                 pw.setVisible(False)
+        # Clear any highlighted parameter
+        self._unhighlight_all_params()
+
+    def _highlight_param(self, idx):
+        """Highlight a parameter when user interacts with its slider."""
+        self._unhighlight_all_params()
+        if idx < len(self._param_widgets):
+            self._param_widgets[idx].set_highlighted(True)
+
+    def _on_param_focus(self, idx, pw, event):
+        """Handle focus in on parameter spinbox."""
+        self._unhighlight_all_params()
+        pw.set_highlighted(True)
+        # Call original focusInEvent
+        pw.spin.focusInEvent.__wrapped__(event) if hasattr(pw.spin.focusInEvent, '__wrapped__') else None
+
+    def _unhighlight_all_params(self):
+        """Remove highlighting from all parameters."""
+        for pw in self._param_widgets:
+            pw.set_highlighted(False)
 
     def _get_vals(self):
         n = len(MODEL_PARAMS[self.model])
@@ -2798,11 +2895,19 @@ class MainWindow(QMainWindow):
             self._on_aperture(mask, float(cx_px), float(cy_px),
                             float(a_px), float(b_px), float(pa_deg))
 
+    def _toggle_aperture_lock(self):
+        """Toggle aperture lock state and update UI."""
+        locked = self.map_canvas.toggle_aperture_lock()
+        emoji = "🔒" if locked else "🔓"
+        self._aperture_lock_btn.setText(emoji)
+
     def _on_aperture_cleared(self):
         self.real_fdf   = None
         self.real_q     = None
         self.real_u     = None
         self.real_label = None
+        self._aperture_lock_btn.setEnabled(False)
+        self._aperture_lock_btn.setText("🔓")
         self._update()
 
     def _schedule_update(self):
@@ -2811,6 +2916,10 @@ class MainWindow(QMainWindow):
     def _on_aperture(self, mask, cx, cy, a, b, pa):
         n_pix = int(mask.sum())
         ms    = self.map_step
+
+        # Enable the lock/unlock button now that an aperture exists
+        self._aperture_lock_btn.setEnabled(True)
+        self._aperture_lock_btn.setText("🔓")
 
         # Show "computing…" in status bar immediately so the UI looks responsive.
         self.statusBar().showMessage("Computing aperture FDF…")
