@@ -2361,6 +2361,9 @@ class MainWindow(QMainWindow):
         self._show_peak_labels = True
         self._show_rmsf        = True
 
+        # Track if parameters have changed since last save/load
+        self._workspace_dirty = False
+
         # ── Load data ─────────────────────────────────────────────────────────
         self.has_data = self.has_qu = False
         self.map_step  = map_step
@@ -2720,6 +2723,7 @@ class MainWindow(QMainWindow):
             {k: v for k, v in ws_data.items() if k not in ["model", "params"]}
         )
         if success:
+            self._workspace_dirty = False  # Mark as saved
             QMessageBox.information(self, "Success", msg)
         else:
             QMessageBox.critical(self, "Error", msg)
@@ -2746,6 +2750,7 @@ class MainWindow(QMainWindow):
         ws_data = Workspace.load_workspace(self._fdf_path, name)
         if ws_data:
             self._apply_workspace_data(ws_data)
+            self._workspace_dirty = False  # Mark as clean after loading
             QMessageBox.information(self, "Success", f"Workspace '{name}' loaded.")
         else:
             QMessageBox.critical(self, "Error", "Failed to load workspace.")
@@ -2778,6 +2783,41 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Success", f"Workspace '{name}' deleted.")
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete workspace.")
+
+    def closeEvent(self, event):
+        """Prompt to save workspace before closing if parameters have changed."""
+        if self.has_data and self._workspace_dirty:
+            reply = QMessageBox.question(
+                self, "Save Workspace?",
+                "You have unsaved parameter changes.\n\nWould you like to save this as a workspace?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Cancel:
+                event.ignore()
+                return
+            elif reply == QMessageBox.Save:
+                # Show save dialog
+                name, ok = QInputDialog.getText(
+                    self, "Save Workspace", "Enter workspace name:",
+                    QLineEdit.Normal, ""
+                )
+                if ok and name.strip():
+                    name = name.strip()
+                    ws_data = self._get_current_workspace_data()
+                    success, msg = Workspace.save_workspace(
+                        self._fdf_path, name, ws_data["model"], ws_data["params"],
+                        {k: v for k, v in ws_data.items() if k not in ["model", "params"]}
+                    )
+                    if success:
+                        self._workspace_dirty = False
+                else:
+                    if QMessageBox.question(self, "Close Without Saving",
+                                          "Close without saving?",
+                                          QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                        event.ignore()
+                        return
+
+        event.accept()
 
     def _build_controls(self):
         panel = QWidget()
@@ -3307,6 +3347,7 @@ class MainWindow(QMainWindow):
         self._update()
 
     def _schedule_update(self):
+        self._workspace_dirty = True  # Mark workspace as unsaved
         self._update_timer.start(40)
 
     def _on_aperture(self, mask, cx, cy, a, b, pa):
