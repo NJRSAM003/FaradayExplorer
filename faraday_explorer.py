@@ -543,6 +543,314 @@ class ApertureEditDialog(QDialog):
         return self._a_spin.value(), self._b_spin.value(), self._pa_spin.value()
 
 
+class CoordinateApertureDialog(QDialog):
+    """Input aperture by coordinates (RA/Dec, decimal degrees, or pixel).
+
+    Live-updates aperture position and size via sliders on the map preview.
+    Pans the map to keep the aperture centered in view.
+    """
+
+    aperture_set = pyqtSignal(np.ndarray, float, float, float, float, float)  # mask,cx,cy,a,b,pa
+
+    def __init__(self, wcs_2d=None, map_canvas=None, pix_scale_ds=None,
+                 map_shape=None, map_step=1, parent=None):
+        """
+        wcs_2d: astropy.wcs.WCS object for the 2D map (for RA/Dec ↔ pixel conversion)
+        map_canvas: MapCanvas instance to update live
+        pix_scale_ds: arcsec per downsampled pixel
+        map_shape: (ny, nx) for downsampled map
+        map_step: downsampling factor (1 = native, 24 = 24x downsampled)
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Aperture by Coordinates")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setMinimumWidth(450)
+        self.setMinimumHeight(600)
+
+        self.wcs_2d = wcs_2d
+        self.map_canvas = map_canvas
+        self._ps = pix_scale_ds  # arcsec / ds-px
+        self.map_shape = map_shape  # (ny, nx)
+        self.map_step = map_step
+
+        self.cx_px = None  # center in downsampled pixels
+        self.cy_px = None
+        self.a_px = 10.0   # semi-major in ds-px
+        self.b_px = 5.0    # semi-minor in ds-px
+        self.pa_deg = 0.0  # position angle
+
+        self._build_ui()
+        self._update_preview()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # ── Coordinate input section ──────────────────────────────────────
+        coord_grp = QGroupBox("Aperture Center Position")
+        coord_form = QFormLayout(coord_grp)
+
+        # Coordinate format selector
+        self._coord_format = QComboBox()
+        self._coord_format.addItem("RA/Dec (HH:MM:SS ±DD:MM:SS)")
+        self._coord_format.addItem("Decimal degrees (°)")
+        self._coord_format.addItem("Pixel coordinates (ds-px)")
+        self._coord_format.currentIndexChanged.connect(self._on_format_changed)
+        coord_form.addRow("Format:", self._coord_format)
+
+        # RA field
+        self._ra_input = QLineEdit()
+        self._ra_input.setPlaceholderText("RA or RA/x in selected format")
+        self._ra_input.setToolTip("RA in selected format (HH:MM:SS, decimal degrees, or pixel)")
+        self._ra_input.textChanged.connect(self._on_coords_changed)
+        coord_form.addRow("RA / X:", self._ra_input)
+
+        # Dec field
+        self._dec_input = QLineEdit()
+        self._dec_input.setPlaceholderText("Dec or Dec/y in selected format")
+        self._dec_input.setToolTip("Dec in selected format (±DD:MM:SS, decimal degrees, or pixel)")
+        self._dec_input.textChanged.connect(self._on_coords_changed)
+        coord_form.addRow("Dec / Y:", self._dec_input)
+
+        layout.addWidget(coord_grp)
+
+        # ── Aperture dimensions section ──────────────────────────────────
+        apert_grp = QGroupBox("Aperture Dimensions")
+        apert_form = QFormLayout(apert_grp)
+
+        # Units selector
+        self._units = QComboBox()
+        if self._ps:
+            self._units.addItem('arcsec (")')
+            self._units.addItem("pixels (ds-px)")
+        else:
+            self._units.addItem("pixels (ds-px)")
+        self._units.currentIndexChanged.connect(self._on_units_changed)
+        apert_form.addRow("Units:", self._units)
+
+        # Semi-major slider
+        self._a_slider = QSlider(Qt.Horizontal)
+        self._a_slider.setRange(1, 500)
+        self._a_slider.setValue(int(self.a_px))
+        self._a_slider.setTickPosition(QSlider.TicksBelow)
+        self._a_slider.setTickInterval(50)
+        self._a_slider.sliderMoved.connect(self._on_slider_moved)
+        self._a_slider.valueChanged.connect(self._on_slider_moved)
+
+        self._a_label = QLabel()
+        a_row = QHBoxLayout()
+        a_row.addWidget(QLabel("Semi-major (a):"))
+        a_row.addWidget(self._a_slider)
+        a_row.addWidget(self._a_label)
+        a_row.setStretchFactor(self._a_slider, 1)
+        apert_form.addRow(a_row)
+
+        # Semi-minor slider
+        self._b_slider = QSlider(Qt.Horizontal)
+        self._b_slider.setRange(1, 500)
+        self._b_slider.setValue(int(self.b_px))
+        self._b_slider.setTickPosition(QSlider.TicksBelow)
+        self._b_slider.setTickInterval(50)
+        self._b_slider.sliderMoved.connect(self._on_slider_moved)
+        self._b_slider.valueChanged.connect(self._on_slider_moved)
+
+        self._b_label = QLabel()
+        b_row = QHBoxLayout()
+        b_row.addWidget(QLabel("Semi-minor (b):"))
+        b_row.addWidget(self._b_slider)
+        b_row.addWidget(self._b_label)
+        b_row.setStretchFactor(self._b_slider, 1)
+        apert_form.addRow(b_row)
+
+        # Position angle slider
+        self._pa_slider = QSlider(Qt.Horizontal)
+        self._pa_slider.setRange(0, 360)
+        self._pa_slider.setValue(0)
+        self._pa_slider.setTickPosition(QSlider.TicksBelow)
+        self._pa_slider.setTickInterval(30)
+        self._pa_slider.sliderMoved.connect(self._on_slider_moved)
+        self._pa_slider.valueChanged.connect(self._on_slider_moved)
+
+        self._pa_label = QLabel("0.0°")
+        pa_row = QHBoxLayout()
+        pa_row.addWidget(QLabel("Position angle:"))
+        pa_row.addWidget(self._pa_slider)
+        pa_row.addWidget(self._pa_label)
+        pa_row.setStretchFactor(self._pa_slider, 1)
+        apert_form.addRow(pa_row)
+
+        layout.addWidget(apert_grp)
+
+        # ── Buttons ───────────────────────────────────────────────────────
+        btns = QHBoxLayout()
+        accept_btn = QPushButton("Accept")
+        accept_btn.setDefault(True)
+        accept_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(accept_btn)
+        btns.addWidget(cancel_btn)
+        layout.addLayout(btns)
+
+        self._update_labels()
+
+    def _in_arcsec(self):
+        return self._ps is not None and self._units.currentIndex() == 0
+
+    def _update_labels(self):
+        """Update slider value labels with current units."""
+        if self._in_arcsec():
+            a_val = self.a_px * self._ps
+            b_val = self.b_px * self._ps
+            suffix = '"'
+        else:
+            a_val = self.a_px
+            b_val = self.b_px
+            suffix = " ds-px"
+        self._a_label.setText(f"{a_val:.2f}{suffix}")
+        self._b_label.setText(f"{b_val:.2f}{suffix}")
+        self._pa_label.setText(f"{self.pa_deg:.1f}°")
+
+    def _on_format_changed(self):
+        self._ra_input.clear()
+        self._dec_input.clear()
+
+    def _on_units_changed(self):
+        self._update_labels()
+        # Adjust sliders if switching to/from arcsec
+        if self._in_arcsec() and self._ps:
+            # Now in arcsec; update slider ranges to make sense in arcsec
+            self._a_slider.blockSignals(True)
+            self._b_slider.blockSignals(True)
+            max_arcsec = 500 * self._ps
+            self._a_slider.setRange(1, int(max_arcsec))
+            self._a_slider.setValue(int(self.a_px * self._ps))
+            self._b_slider.setRange(1, int(max_arcsec))
+            self._b_slider.setValue(int(self.b_px * self._ps))
+            self._a_slider.blockSignals(False)
+            self._b_slider.blockSignals(False)
+        else:
+            # Back to pixels
+            self._a_slider.blockSignals(True)
+            self._b_slider.blockSignals(True)
+            self._a_slider.setRange(1, 500)
+            self._a_slider.setValue(int(self.a_px))
+            self._b_slider.setRange(1, 500)
+            self._b_slider.setValue(int(self.b_px))
+            self._a_slider.blockSignals(False)
+            self._b_slider.blockSignals(False)
+
+    def _on_coords_changed(self):
+        """Parse coordinate input and update preview."""
+        fmt = self._coord_format.currentIndex()
+        ra_str = self._ra_input.text().strip()
+        dec_str = self._dec_input.text().strip()
+
+        if not ra_str or not dec_str:
+            return
+
+        try:
+            if fmt == 0:  # RA/Dec HH:MM:SS
+                self.cx_px, self.cy_px = self._parse_radec(ra_str, dec_str)
+            elif fmt == 1:  # Decimal degrees
+                self.cx_px, self.cy_px = self._parse_degrees(ra_str, dec_str)
+            else:  # Pixels
+                self.cx_px, self.cy_px = self._parse_pixels(ra_str, dec_str)
+
+            if self.cx_px is not None and self.cy_px is not None:
+                self._update_preview()
+        except Exception as e:
+            pass  # Silently ignore parse errors (user still typing)
+
+    def _on_slider_moved(self):
+        """Update aperture dimensions from sliders and refresh preview."""
+        if self._in_arcsec() and self._ps:
+            self.a_px = self._a_slider.value() / self._ps
+            self.b_px = self._b_slider.value() / self._ps
+        else:
+            self.a_px = float(self._a_slider.value())
+            self.b_px = float(self._b_slider.value())
+        self.pa_deg = float(self._pa_slider.value())
+
+        self._update_labels()
+        self._update_preview()
+
+    def _parse_radec(self, ra_str, dec_str):
+        """Parse RA (HH:MM:SS) and Dec (±DD:MM:SS) to pixel coords via WCS."""
+        from astropy.coordinates import Angle
+        import astropy.units as u
+
+        if not self.wcs_2d:
+            raise ValueError("No WCS available for RA/Dec parsing")
+
+        try:
+            ra_angle = Angle(ra_str, unit=u.hour)
+            dec_angle = Angle(dec_str, unit=u.degree)
+            ra_deg = ra_angle.deg
+            dec_deg = dec_angle.deg
+
+            x_px, y_px = self.wcs_2d.all_world2pix(ra_deg, dec_deg, 0)
+            x_ds = x_px / self.map_step
+            y_ds = y_px / self.map_step
+            return float(x_ds), float(y_ds)
+        except Exception as e:
+            raise ValueError(f"Failed to parse RA/Dec: {e}")
+
+    def _parse_degrees(self, ra_str, dec_str):
+        """Parse RA and Dec as decimal degrees to pixel coords via WCS."""
+        if not self.wcs_2d:
+            raise ValueError("No WCS available for degree parsing")
+
+        try:
+            ra_deg = float(ra_str)
+            dec_deg = float(dec_str)
+
+            x_px, y_px = self.wcs_2d.all_world2pix(ra_deg, dec_deg, 0)
+            x_ds = x_px / self.map_step
+            y_ds = y_px / self.map_step
+            return float(x_ds), float(y_ds)
+        except ValueError as e:
+            raise ValueError(f"Failed to parse degrees: {e}")
+
+    def _parse_pixels(self, x_str, y_str):
+        """Parse direct pixel coordinates."""
+        try:
+            x = float(x_str)
+            y = float(y_str)
+            return float(x), float(y)
+        except ValueError as e:
+            raise ValueError(f"Failed to parse pixels: {e}")
+
+    def _update_preview(self):
+        """Update the aperture preview on the map and pan to center."""
+        if self.map_canvas is None or self.cx_px is None or self.cy_px is None:
+            return
+
+        # Pan map to center on aperture
+        ax = self.map_canvas.ax
+        hw = (ax.get_xlim()[1] - ax.get_xlim()[0]) / 2
+        hh = (ax.get_ylim()[1] - ax.get_ylim()[0]) / 2
+        ax.set_xlim(self.cx_px - hw, self.cx_px + hw)
+        ax.set_ylim(self.cy_px - hh, self.cy_px + hh)
+
+        # Remove old patch if exists
+        if hasattr(self.map_canvas, '_patch') and self.map_canvas._patch is not None:
+            self.map_canvas._patch.remove()
+
+        # Draw new aperture patch
+        patch = mpatches.Ellipse(
+            (self.cx_px, self.cy_px), width=2*self.a_px, height=2*self.b_px,
+            angle=self.pa_deg, fill=False, edgecolor="lime", lw=2.0,
+            ls=":", zorder=5)
+        ax.add_patch(patch)
+        self.map_canvas._patch = patch
+        self.map_canvas.draw_idle()
+
+    def values(self):
+        """Return (cx_px, cy_px, a_px, b_px, pa_deg) in downsampled pixels."""
+        return self.cx_px, self.cy_px, self.a_px, self.b_px, self.pa_deg
+
+
 # ── MapCanvas: FDF peak map with aperture drawing ────────────────────────────
 
 class MapCanvas(FigureCanvas):
@@ -2282,6 +2590,20 @@ class MainWindow(QMainWindow):
         hbox2.addStretch()
 
         vbox.addWidget(ctrl2)
+
+        # ── Third control row: aperture tools ──────────────────────────────
+        ctrl3 = QWidget()
+        hbox3 = QHBoxLayout(ctrl3)
+        hbox3.setContentsMargins(0, 0, 0, 0)
+
+        hbox3.addWidget(QLabel("Aperture:"))
+        coord_btn = QPushButton("By Coordinates…")
+        coord_btn.setToolTip("Enter aperture center and dimensions via coordinates")
+        coord_btn.clicked.connect(self._open_coordinate_aperture)
+        hbox3.addWidget(coord_btn)
+        hbox3.addStretch()
+
+        vbox.addWidget(ctrl3)
         vbox.addWidget(self.map_canvas, stretch=1)
 
         self._map_cube_cb.currentIndexChanged.connect(self._on_map_cube_changed)
@@ -2431,6 +2753,50 @@ class MainWindow(QMainWindow):
             self._model_scale_spin.setValue(float(self.real_fdf.max()) /
                                             max(float(self._last_amax), 1e-30))
         self._schedule_update()
+
+    def _open_coordinate_aperture(self):
+        """Open the coordinate aperture dialog and finalize aperture if accepted."""
+        ms = self.map_step
+        dlg = CoordinateApertureDialog(
+            wcs_2d=self.wcs2d,
+            map_canvas=self.map_canvas,
+            pix_scale_ds=self.beam_info.get("pix_scale") * ms if self.beam_info else None,
+            map_shape=self.peak_map.shape if hasattr(self, 'peak_map') else None,
+            map_step=ms,
+            parent=self
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        cx_px, cy_px, a_px, b_px, pa_deg = dlg.values()
+        if cx_px is None or cy_px is None:
+            return
+
+        # Create mask and emit aperture
+        ny, nx = self.peak_map.shape
+        ys, xs = np.ogrid[0:ny, 0:nx]
+        pa_rad = np.deg2rad(pa_deg)
+        cos_a, sin_a = np.cos(pa_rad), np.sin(pa_rad)
+        dx, dy = xs - cx_px, ys - cy_px
+        x_rot = dx * cos_a + dy * sin_a
+        y_rot = -dx * sin_a + dy * cos_a
+        mask = (x_rot / a_px) ** 2 + (y_rot / b_px) ** 2 <= 1.0
+
+        if mask.sum() > 0:
+            # Update the map canvas patch to match the finalized aperture
+            if self.map_canvas._patch:
+                self.map_canvas._patch.remove()
+            patch = mpatches.Ellipse(
+                (cx_px, cy_px), width=2*a_px, height=2*b_px, angle=pa_deg,
+                fill=False, edgecolor="cyan", lw=2.0, zorder=5)
+            self.map_canvas.ax.add_patch(patch)
+            self.map_canvas._patch = patch
+            self.map_canvas._aperture_finalised = True
+            self.map_canvas.draw_idle()
+
+            # Process aperture as normal
+            self._on_aperture(mask, float(cx_px), float(cy_px),
+                            float(a_px), float(b_px), float(pa_deg))
 
     def _on_aperture_cleared(self):
         self.real_fdf   = None
