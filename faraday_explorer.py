@@ -709,6 +709,16 @@ class CoordinateApertureDialog(QDialog):
 
         layout.addWidget(apert_grp)
 
+        # ── Status/error display ──────────────────────────────────────────
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet(
+            "color: #d32f2f; font-weight: bold; padding: 4px; "
+            "background-color: rgba(211, 47, 47, 0.1); border-radius: 3px;"
+        )
+        self._status_label.setVisible(False)
+        self._status_label.setWordWrap(True)
+        layout.addWidget(self._status_label)
+
         # ── Buttons ───────────────────────────────────────────────────────
         btns = QHBoxLayout()
         accept_btn = QPushButton("Accept")
@@ -776,6 +786,7 @@ class CoordinateApertureDialog(QDialog):
         dec_str = self._dec_input.text().strip()
 
         if not ra_str or not dec_str:
+            self._status_label.setVisible(False)
             return
 
         try:
@@ -787,9 +798,11 @@ class CoordinateApertureDialog(QDialog):
                 self.cx_px, self.cy_px = self._parse_pixels(ra_str, dec_str)
 
             if self.cx_px is not None and self.cy_px is not None:
+                self._status_label.setVisible(False)
                 self._update_preview()
         except Exception as e:
-            pass  # Silently ignore parse errors (user still typing)
+            self._status_label.setText(f"⚠ Error: {str(e)}")
+            self._status_label.setVisible(True)
 
     def _on_slider_moved(self):
         """Update aperture dimensions from sliders and refresh preview."""
@@ -823,7 +836,9 @@ class CoordinateApertureDialog(QDialog):
             y_ds = y_px / self.map_step
             return float(x_ds), float(y_ds)
         except Exception as e:
-            raise ValueError(f"Failed to parse RA/Dec: {e}")
+            raise ValueError(
+                f"Invalid RA/Dec format. Expected HH:MM:SS.S ±DD:MM:SS.S, got '{ra_str}' / '{dec_str}'"
+            )
 
     def _parse_degrees(self, ra_str, dec_str):
         """Parse RA and Dec as decimal degrees to pixel coords via WCS."""
@@ -1976,6 +1991,36 @@ class LaunchDialog(QDialog):
 
 # ── Loading progress dialog ───────────────────────────────────────────────────
 
+# ── Peak map caching ──────────────────────────────────────────────────────────
+
+def _get_peak_cache_path(fdf_path):
+    """Return the cache file path for a FDF cube's peak map."""
+    return fdf_path + ".peak.npy"
+
+def _load_peak_cache(fdf_path):
+    """Try to load cached peak map; return None if not available or stale."""
+    cache_path = _get_peak_cache_path(fdf_path)
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        # Check if cache is newer than FDF file
+        fdf_mtime = os.path.getmtime(fdf_path)
+        cache_mtime = os.path.getmtime(cache_path)
+        if cache_mtime < fdf_mtime:
+            return None  # Cache is stale
+        return np.load(cache_path)
+    except Exception:
+        return None
+
+def _save_peak_cache(fdf_path, peak_map):
+    """Save peak map to cache file."""
+    cache_path = _get_peak_cache_path(fdf_path)
+    try:
+        np.save(cache_path, peak_map)
+    except Exception:
+        pass  # Silently fail if we can't write cache
+
+
 class LoadingDialog(QDialog):
     """Modal progress dialog — loads cubes synchronously with processEvents()
     between steps so the bar stays live without needing a background thread."""
@@ -2070,21 +2115,29 @@ class LoadingDialog(QDialog):
             except Exception:
                 result["wcs2d"] = None
 
-            # Peak map: iterate over phi slabs so processEvents() fires
-            # between each slab and macOS doesn't kill an unresponsive process.
-            n_phi   = data.shape[0]
-            step    = self._map_step
-            n_slabs = max(1, min(20, n_phi))  # up to 20 progress ticks
-            slab_sz = max(1, (n_phi + n_slabs - 1) // n_slabs)
-            peak    = None
-            for slab_start in range(0, n_phi, slab_sz):
-                slab_end  = min(slab_start + slab_sz, n_phi)
-                chunk     = data[slab_start:slab_end, ::step, ::step]
-                chunk_max = np.asarray(chunk).max(axis=0)
-                peak = chunk_max if peak is None else np.maximum(peak, chunk_max)
-                pct  = 15 + int(35 * slab_end / n_phi)   # 15 → 50 %
-                self._step(pct, f"Computing peak map… {slab_end}/{n_phi} planes")
-            result["peak_map"] = peak
+            # Peak map: try cache first, then compute and cache
+            self._step(15, "Loading peak map…")
+            peak = _load_peak_cache(fdf_path)
+            if peak is not None:
+                self._step(50, "Peak map loaded from cache.")
+                result["peak_map"] = peak
+            else:
+                # Compute and cache: iterate over phi slabs so processEvents() fires
+                # between each slab and macOS doesn't kill an unresponsive process.
+                n_phi   = data.shape[0]
+                step    = self._map_step
+                n_slabs = max(1, min(20, n_phi))  # up to 20 progress ticks
+                slab_sz = max(1, (n_phi + n_slabs - 1) // n_slabs)
+                peak    = None
+                for slab_start in range(0, n_phi, slab_sz):
+                    slab_end  = min(slab_start + slab_sz, n_phi)
+                    chunk     = data[slab_start:slab_end, ::step, ::step]
+                    chunk_max = np.asarray(chunk).max(axis=0)
+                    peak = chunk_max if peak is None else np.maximum(peak, chunk_max)
+                    pct  = 15 + int(35 * slab_end / n_phi)   # 15 → 50 %
+                    self._step(pct, f"Computing peak map… {slab_end}/{n_phi} planes")
+                result["peak_map"] = peak
+                _save_peak_cache(fdf_path, peak)
             result["has_data"] = True
 
             fs  = self._paths.get("full_stokes")
