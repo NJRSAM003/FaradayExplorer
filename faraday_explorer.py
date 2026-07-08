@@ -2852,7 +2852,15 @@ class MainWindow(QMainWindow):
         self._schedule_update()
 
     def _open_coordinate_aperture(self):
-        """Open the coordinate aperture dialog and finalize aperture if accepted."""
+        """Open non-modal coordinate aperture dialog for live adjustment.
+
+        Dialog stays open so you can zoom/pan map while adjusting parameters.
+        """
+        if hasattr(self, '_coord_dialog') and self._coord_dialog is not None:
+            self._coord_dialog.raise_()
+            self._coord_dialog.activateWindow()
+            return
+
         ms = self.map_step
         dlg = CoordinateApertureDialog(
             wcs_2d=self.wcs2d,
@@ -2862,11 +2870,22 @@ class MainWindow(QMainWindow):
             map_step=ms,
             parent=self
         )
-        if dlg.exec_() != QDialog.Accepted:
+        # Connect signals instead of using exec_()
+        dlg.accepted.connect(self._finalize_coordinate_aperture)
+        dlg.rejected.connect(lambda: self._cleanup_coord_dialog())
+
+        self._coord_dialog = dlg
+        dlg.show()  # Non-modal display
+
+    def _finalize_coordinate_aperture(self):
+        """Finalize aperture from non-modal dialog."""
+        dlg = self._coord_dialog
+        if dlg is None:
             return
 
         cx_px, cy_px, a_px, b_px, pa_deg = dlg.values()
         if cx_px is None or cy_px is None:
+            self._cleanup_coord_dialog()
             return
 
         # Create mask and emit aperture
@@ -2894,6 +2913,14 @@ class MainWindow(QMainWindow):
             # Process aperture as normal
             self._on_aperture(mask, float(cx_px), float(cy_px),
                             float(a_px), float(b_px), float(pa_deg))
+
+        self._cleanup_coord_dialog()
+
+    def _cleanup_coord_dialog(self):
+        """Clean up the coordinate dialog."""
+        if hasattr(self, '_coord_dialog') and self._coord_dialog is not None:
+            self._coord_dialog.close()
+            self._coord_dialog = None
 
     def _toggle_aperture_lock(self):
         """Toggle aperture lock state and update UI."""
