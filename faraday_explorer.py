@@ -2931,7 +2931,8 @@ class MainWindow(QMainWindow):
         self.qu_fig    = Figure(facecolor="#fafafa")
         self.qu_canvas = FigureCanvas(self.qu_fig)
         self.qu_ax     = self.qu_fig.add_subplot(111)
-        v.addWidget(CompactNavToolbar(self.qu_canvas, holder))
+        # Skip toolbar due to matplotlib icon rendering issues on macOS
+        # Users can zoom/pan with scroll wheel and spacebar-drag
         v.addWidget(self.qu_canvas)
         return holder
 
@@ -2943,11 +2944,12 @@ class MainWindow(QMainWindow):
         self.fdf_canvas = FigureCanvas(self.fdf_fig)
         self.fdf_ax     = self.fdf_fig.add_subplot(111)
 
-        # Toolbar row: matplotlib nav toolbar + Display drop-down on the right
+        # Display controls row (toolbar removed due to matplotlib icon rendering issues on macOS)
+        # Users can zoom/pan with scroll wheel and spacebar-drag
         toolbar_row = QHBoxLayout()
         toolbar_row.setContentsMargins(0, 0, 0, 0)
-        toolbar_row.setSpacing(0)
-        toolbar_row.addWidget(CompactNavToolbar(self.fdf_canvas, holder))
+        toolbar_row.setSpacing(4)
+        toolbar_row.addStretch()
 
         display_btn = QToolButton()
         display_btn.setText("Display ▾")
