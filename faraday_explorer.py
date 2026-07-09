@@ -3399,10 +3399,12 @@ class MainWindow(QMainWindow):
         self._fdf_display_toggle_btn.setFlat(True)
         self._fdf_display_toggle_btn.setMaximumWidth(200)
         self._fdf_display_toggle_btn.setCursor(Qt.PointingHandCursor)
+        # Initial style will be set by _update_fdf_toggle_button_style() after theme is applied
         self._fdf_display_toggle_btn.setStyleSheet(
             "QPushButton { text-align: left; padding: 4px 0px; font-weight: bold; border: none; }"
-            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
         )
+        # Apply theme-aware hover style
+        self._update_fdf_toggle_button_style()
         header_layout.addWidget(self._fdf_display_toggle_btn)
         header_layout.addStretch()
 
@@ -3536,8 +3538,10 @@ class MainWindow(QMainWindow):
         holder = QWidget()
         v = QVBoxLayout(holder)
         v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
         self.fdf_fig    = Figure(facecolor="#fafafa")
         self.fdf_canvas = FigureCanvas(self.fdf_fig)
+        self.fdf_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.fdf_ax     = self.fdf_fig.add_subplot(111)
 
         # Display controls row (toolbar removed due to matplotlib icon rendering issues on macOS)
@@ -3826,6 +3830,27 @@ class MainWindow(QMainWindow):
         for pw in self._param_widgets:
             pw.set_highlighted(False)
 
+    def _update_fdf_toggle_button_style(self):
+        """Update FDF Display toggle button hover style based on current theme."""
+        if not hasattr(self, "_fdf_display_toggle_btn"):
+            return
+
+        theme_name = getattr(self, "theme", "dark")
+        if theme_name.lower() == "dark":
+            # Dark mode: light background with white text
+            hover_bg = "#444444"
+            hover_text = "#ffffff"
+        else:
+            # Light mode: light disabled-looking background with dark text
+            hover_bg = "#e8e8e8"
+            hover_text = "#333333"
+
+        stylesheet = (
+            "QPushButton { text-align: left; padding: 4px 0px; font-weight: bold; border: none; }"
+            f"QPushButton:hover {{ background-color: {hover_bg}; color: {hover_text}; }}"
+        )
+        self._fdf_display_toggle_btn.setStyleSheet(stylesheet)
+
     def set_theme(self, theme_name):
         """Change the application theme and apply stylesheet."""
         self.theme = theme_name
@@ -3839,6 +3864,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_theme_action_group"):
             for action in self._theme_action_group.actions():
                 action.setChecked(action.text().lower() == theme_name.lower())
+
+        # Update FDF Display toggle button hover style for new theme
+        self._update_fdf_toggle_button_style()
 
         # Redraw plots with new theme colors
         self._update()
