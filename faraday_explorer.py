@@ -3526,12 +3526,14 @@ class MainWindow(QMainWindow):
         holder = QWidget()
         v = QVBoxLayout(holder)
         v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
         self.qu_fig    = Figure(facecolor="#fafafa")
         self.qu_canvas = FigureCanvas(self.qu_fig)
+        self.qu_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.qu_ax     = self.qu_fig.add_subplot(111)
         # Skip toolbar due to matplotlib icon rendering issues on macOS
         # Users can zoom/pan with scroll wheel and spacebar-drag
-        v.addWidget(self.qu_canvas)
+        v.addWidget(self.qu_canvas, stretch=1)
         return holder
 
     def _build_fdf_panel(self):
@@ -3586,8 +3588,9 @@ class MainWindow(QMainWindow):
 
         toolbar_widget = QWidget()
         toolbar_widget.setLayout(toolbar_row)
+        toolbar_widget.setMaximumHeight(32)
         v.addWidget(toolbar_widget)
-        v.addWidget(self.fdf_canvas)
+        v.addWidget(self.fdf_canvas, stretch=1)
         return holder
 
     def _build_map_panel(self):
