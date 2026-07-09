@@ -2347,15 +2347,23 @@ def _label_to_key(label):
       "σ_RM₁[rad/m²]" → "sigma_RM_1_rad_m2"
       "RM₂ [rad/m²]" → "RM_2_rad_m2"
     """
+    import re
     # Replace Greek letters with ASCII equivalents
     key = label.replace("χ", "chi").replace("σ", "sigma")
+    # Add space before bracket if bracket follows subscript (no space between)
+    # This handles: RM₁[rad → RM₁ [rad
+    key = re.sub(r'([₀₁₂₃])\[', r'\1 [', key)
     # Remove subscript/superscript numbers and replace with underscore + number
     key = key.replace("₀", "_0").replace("₁", "_1").replace("₂", "_2").replace("₃", "_3")
-    # Replace degree symbol and brackets
-    key = key.replace("°", "deg").replace("[", "").replace("]", "")
-    # Replace squared notation
+    # Replace degree symbol
+    key = key.replace("°", "deg")
+    # Remove brackets
+    key = key.replace("[", "").replace("]", "")
+    # Replace squared notation (m² → m2)
     key = key.replace("m²", "m2")
-    # Clean up extra spaces and brackets
+    # Replace forward slash with underscore (rad/m2 → rad_m2)
+    key = key.replace("/", "_")
+    # Clean up extra spaces
     key = key.strip()
     # Replace remaining spaces with underscores
     key = key.replace("  ", "_").replace(" ", "_")
