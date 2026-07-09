@@ -2997,6 +2997,11 @@ class MainWindow(QMainWindow):
             "clipping_pct": float(self._map_clip_cb.currentData()),
         }
 
+        # Pane layout state (QMainWindow dock/toolbar configuration)
+        import base64
+        layout_state_bytes = self.saveState()
+        layout_state_b64 = base64.b64encode(layout_state_bytes).decode('ascii')
+
         return {
             "model": self.model,
             "params": params,
@@ -3011,6 +3016,7 @@ class MainWindow(QMainWindow):
             "aperture": aperture_data,
             "image_zoom": image_zoom,
             "image_settings": image_settings,
+            "layout_state": layout_state_b64,
         }
 
     def _apply_workspace_data(self, ws_data):
@@ -3078,6 +3084,16 @@ class MainWindow(QMainWindow):
             if xlim and ylim:
                 self.map_canvas.ax.set_xlim(xlim)
                 self.map_canvas.ax.set_ylim(ylim)
+
+        # Restore pane layout (dock widgets, toolbars, pane positions/sizes)
+        layout_state = ws_data.get("layout_state")
+        if layout_state:
+            import base64
+            try:
+                layout_state_bytes = base64.b64decode(layout_state.encode('ascii'))
+                self.restoreState(layout_state_bytes)
+            except Exception as e:
+                print(f"[WARN] Failed to restore layout state: {e}")
 
         self._update()
 
