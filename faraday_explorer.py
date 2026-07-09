@@ -3803,6 +3803,9 @@ class MainWindow(QMainWindow):
             for action in self._theme_action_group.actions():
                 action.setChecked(action.text().lower() == theme_name.lower())
 
+        # Redraw plots with new theme colors
+        self._update()
+
     def _get_vals(self):
         n = len(MODEL_PARAMS[self.model])
         return [self._param_widgets[i].value() for i in range(n)]
