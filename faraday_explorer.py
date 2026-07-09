@@ -3017,6 +3017,8 @@ class MainWindow(QMainWindow):
             "show_peak_lines": self._show_peak_lines,
             "show_peak_labels": self._show_peak_labels,
             "show_rmsf": self._show_rmsf,
+            "fix_ymax": self._fix_ymax_cb.isChecked(),
+            "ymax_value": self._ymax_spin.value(),
             "aperture": aperture_data,
             "image_zoom": image_zoom,
             "image_settings": image_settings,
@@ -3044,6 +3046,8 @@ class MainWindow(QMainWindow):
         self._show_peak_lines = ws_data.get("show_peak_lines", True)
         self._show_peak_labels = ws_data.get("show_peak_labels", True)
         self._show_rmsf = ws_data.get("show_rmsf", True)
+        self._fix_ymax_cb.setChecked(ws_data.get("fix_ymax", False))
+        self._ymax_spin.setValue(ws_data.get("ymax_value", 0.010))
 
         # Restore image settings (colormap, clipping)
         image_settings = ws_data.get("image_settings", {})
@@ -3415,6 +3419,33 @@ class MainWindow(QMainWindow):
 
         # Connect reveal_hidden to enable/disable show_total_model checkbox
         self._reveal_hidden_cb.toggled.connect(self._show_total_model_cb.setEnabled)
+
+        # Y-axis scaling for FDF plot
+        self._fix_ymax_cb = QCheckBox("Fix y-axis max")
+        self._fix_ymax_cb.setChecked(False)
+        self._fix_ymax_cb.setToolTip("Lock the y-axis maximum to a fixed value for consistent scaling across plots")
+        self._fix_ymax_cb.toggled.connect(self._schedule_update)
+        disp_layout.addWidget(self._fix_ymax_cb)
+
+        ymax_hbox = QHBoxLayout()
+        ymax_hbox.setContentsMargins(20, 0, 0, 0)  # Indent under checkbox
+        ymax_hbox.addWidget(QLabel("Max value:"))
+        self._ymax_spin = QDoubleSpinBox()
+        self._ymax_spin.setRange(0.001, 1e6)
+        self._ymax_spin.setDecimals(4)
+        self._ymax_spin.setSingleStep(0.01)
+        self._ymax_spin.setValue(0.010)
+        self._ymax_spin.setEnabled(False)  # Only enable when fix_ymax is checked
+        self._ymax_spin.valueChanged.connect(self._schedule_update)
+        ymax_hbox.addWidget(self._ymax_spin)
+        ymax_hbox.addStretch()
+
+        ymax_widget = QWidget()
+        ymax_widget.setLayout(ymax_hbox)
+        disp_layout.addWidget(ymax_widget)
+
+        # Connect fix_ymax checkbox to enable/disable spinbox
+        self._fix_ymax_cb.toggled.connect(self._ymax_spin.setEnabled)
 
         # Manual model scale — visible only when normalise=OFF
         self._model_scale_row = QWidget()
@@ -4173,7 +4204,13 @@ class MainWindow(QMainWindow):
             ax.set_xlim(min(PHI_MIN, dlo), max(PHI_MAX, dhi))
         else:
             ax.set_xlim(PHI_MIN, PHI_MAX)
-        ax.set_ylim(0, 1.20 * ymax)
+
+        # Set y-axis limits (fixed or auto)
+        if self._fix_ymax_cb.isChecked():
+            ax.set_ylim(0, self._ymax_spin.value())
+        else:
+            ax.set_ylim(0, 1.20 * ymax)
+
         self.fdf_fig.tight_layout()
         self.fdf_canvas.draw_idle()
 
