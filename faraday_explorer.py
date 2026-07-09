@@ -2818,8 +2818,12 @@ class MainWindow(QMainWindow):
         ws_menu = fmenu.addMenu("Workspaces")
         save_ws_act = ws_menu.addAction("Save workspace…")
         save_ws_act.triggered.connect(self._save_workspace_dialog)
-        load_ws_act = ws_menu.addAction("Load workspace…")
-        load_ws_act.triggered.connect(self._load_workspace_dialog)
+
+        # Load workspace submenu with available workspaces
+        load_menu = ws_menu.addMenu("Load workspace")
+        self._load_menu = load_menu  # Keep reference for dynamic updates
+        self._populate_load_workspace_menu()
+
         ws_menu.addSeparator()
         manage_ws_act = ws_menu.addAction("Manage workspaces…")
         manage_ws_act.triggered.connect(self._manage_workspaces_dialog)
@@ -3117,6 +3121,7 @@ class MainWindow(QMainWindow):
         )
         if success:
             self._workspace_dirty = False  # Mark as saved
+            self._populate_load_workspace_menu()  # Refresh the Load Workspace submenu
             QMessageBox.information(self, "Success", msg)
         else:
             QMessageBox.critical(self, "Error", msg)
@@ -3147,6 +3152,33 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Success", f"Workspace '{name}' loaded.")
         else:
             QMessageBox.critical(self, "Error", "Failed to load workspace.")
+
+    def _populate_load_workspace_menu(self):
+        """Populate Load Workspace submenu with available workspaces."""
+        if not self.has_data:
+            return
+
+        self._load_menu.clear()
+
+        workspaces = Workspace.list_workspaces(self._fdf_path)
+        if not workspaces:
+            self._load_menu.addAction("(No workspaces)").setEnabled(False)
+            return
+
+        ws_names = [w.replace('.json', '') for w in workspaces]
+        for ws_name in ws_names:
+            action = self._load_menu.addAction(ws_name)
+            # Use lambda with default argument to capture current ws_name
+            action.triggered.connect(lambda checked, name=ws_name: self._load_workspace_by_name(name))
+
+    def _load_workspace_by_name(self, name):
+        """Load a workspace by name."""
+        ws_data = Workspace.load_workspace(self._fdf_path, name)
+        if ws_data:
+            self._apply_workspace_data(ws_data)
+            self._workspace_dirty = False  # Mark as clean after loading
+        else:
+            QMessageBox.critical(self, "Error", f"Failed to load workspace '{name}'.")
 
     def _manage_workspaces_dialog(self):
         """Show dialog to manage (delete) workspaces."""
@@ -4042,21 +4074,27 @@ class MainWindow(QMainWindow):
             try:
                 P_components = model_P_components(self.model, vals, self.lam2)
 
+                # For intrinsic mode: compute each component WITHOUT restoration first
+                # so they can be displayed individually, then show the restored sum
+                component_amps_restored = []
+
                 # Plot each component with a different color
                 for i, P_comp in enumerate(P_components):
                     if convolved:
                         comp_fdf = rm_synthesis(P_comp, self.lam2, self.phi)
                         comp_amp = np.abs(comp_fdf) * model_scale
                     else:
-                        # For intrinsic (non-convolved): compute component-wise FDF with Gaussian restoration
+                        # For intrinsic: compute component intrinsic FDF with restoration
                         comp_amp_raw = model_fdf_clean_component(self.model, vals, self.phi, self.lam2, comp_idx=i)
                         comp_amp = _gaussian_restore(comp_amp_raw, self.phi, self.rmsf) * model_scale
 
+                    component_amps_restored.append(comp_amp)
                     color = component_colors[i % len(component_colors)]
                     label = component_labels[i] if i < len(component_labels) else f"Comp {i+1}"
                     ax.plot(self.phi, comp_amp, color=color, lw=1.2, alpha=0.7, label=label)
 
                 # Plot combined model (conditionally, when show_total_model is enabled)
+                # This uses the correctly-computed model_amp from the _update method
                 if self._show_total_model_cb.isChecked():
                     ax.plot(self.phi, model_amp, color="black", lw=2.0,
                             label=f"{model_lbl}", linestyle="-", zorder=10)
