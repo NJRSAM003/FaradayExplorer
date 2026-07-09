@@ -4031,10 +4031,12 @@ class MainWindow(QMainWindow):
         # Apply theme colors
         is_dark = self.theme == "dark"
         bg_color = "#2d2d2d" if is_dark else "#fdfdfd"
-        text_color = "#e0e0e0" if is_dark else "#000000"
-        grid_color = "#444444" if is_dark else "#cccccc"
+        text_color = "#ffffff" if is_dark else "#000000"
+        grid_color = "#555555" if is_dark else "#cccccc"
         line_color = "#555555" if is_dark else "#000000"
 
+        # Set both figure and axes background colors
+        self.qu_fig.patch.set_facecolor(bg_color)
         ax.set_facecolor(bg_color)
         ax.plot(freqs_G, P.real, color="royalblue",  lw=1.5, label="q model")
         ax.plot(freqs_G, P.imag, color="darkorange", lw=1.5, label="u model")
@@ -4077,10 +4079,13 @@ class MainWindow(QMainWindow):
         # Apply theme colors
         is_dark = self.theme == "dark"
         bg_color = "#2d2d2d" if is_dark else "#fdfdfd"
-        text_color = "#e0e0e0" if is_dark else "#000000"
-        grid_color = "#444444" if is_dark else "#cccccc"
+        text_color = "#ffffff" if is_dark else "#000000"
+        grid_color = "#555555" if is_dark else "#cccccc"
         annotation_bg = "#3d3d3d" if is_dark else "#ffffff"
+        annotation_text = "#ffffff" if is_dark else "#000000"
 
+        # Set both figure and axes background colors
+        self.fdf_fig.patch.set_facecolor(bg_color)
         ax.set_facecolor(bg_color)
 
         # ── Model amplitude: scale to data peak (ON) or manual spinbox (OFF) ──
@@ -4111,8 +4116,13 @@ class MainWindow(QMainWindow):
         # We set ax2 ylim so RMSF peak (1.0) appears at 50 % of plot height.
         ax2 = ax.twinx()
         ax2.set_ylim(0, 1.25)   # RMSF peak=1.0 at RM=0 with 0.25 headroom
-        rmsf_color = "#888888" if is_dark else "gray"
+        rmsf_color = "#aaaaaa" if is_dark else "gray"
+        # Apply background color to ax2 and style its spines
+        ax2.set_facecolor(bg_color)
         ax2.tick_params(axis='y', labelcolor=rmsf_color, labelsize=6)
+        # Color ax2 spines to match theme
+        for spine in ax2.spines.values():
+            spine.set_color(text_color)
         if self._show_rmsf:
             ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color=rmsf_color)
             ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color=rmsf_color, zorder=1)
@@ -4187,7 +4197,7 @@ class MainWindow(QMainWindow):
                                 xytext=(5, 3), textcoords="offset points",
                                 fontsize=7, color="steelblue",
                                 bbox=dict(boxstyle="round,pad=0.2", fc=annotation_bg,
-                                          ec="steelblue", alpha=0.85, lw=0.5))
+                                          ec="steelblue", alpha=0.85, lw=0.5, edgecolor="steelblue"))
 
         # ── Real FDF overlay ──────────────────────────────────────────────────
         if has_data:
@@ -4212,7 +4222,7 @@ class MainWindow(QMainWindow):
                                     xytext=(-4, 8), textcoords="offset points",
                                     fontsize=7, color="darkorange",
                                     bbox=dict(boxstyle="round,pad=0.2", fc=annotation_bg,
-                                              ec="darkorange", alpha=0.85, lw=0.5))
+                                              ec="darkorange", alpha=0.85, lw=0.5, edgecolor="darkorange"))
 
         norm_note = ("model scaled to data peak" if (has_data and normalise)
                      else f"model ×{model_scale:.3g}" if not normalise
