@@ -2146,6 +2146,105 @@ class Workspace:
             return False
 
 
+# ── Model file save/load (.mod format) ────────────────────────────────────────
+
+def _label_to_key(label):
+    """
+    Convert fancy display label to plain ASCII key for .mod files.
+    Examples:
+      "p₀" → "p_0"
+      "χ₀  [°]" → "chi_0_deg"
+      "RM  [rad/m²]" → "RM_rad_m2"
+      "σ_RM₁[rad/m²]" → "sigma_RM_1_rad_m2"
+      "RM₂ [rad/m²]" → "RM_2_rad_m2"
+    """
+    # Replace Greek letters with ASCII equivalents
+    key = label.replace("χ", "chi").replace("σ", "sigma")
+    # Remove subscript/superscript numbers and replace with underscore + number
+    key = key.replace("₀", "_0").replace("₁", "_1").replace("₂", "_2").replace("₃", "_3")
+    # Replace degree symbol and brackets
+    key = key.replace("°", "deg").replace("[", "").replace("]", "")
+    # Replace squared notation
+    key = key.replace("m²", "m2")
+    # Clean up extra spaces and brackets
+    key = key.strip()
+    # Replace remaining spaces with underscores
+    key = key.replace("  ", "_").replace(" ", "_")
+    return key
+
+def _key_to_label(key, model):
+    """
+    Reverse mapping: convert ASCII key back to fancy label.
+    Used when loading .mod files to display in UI.
+    """
+    # This is a fallback mapping for known patterns
+    # The primary method is to match by order in MODEL_PARAMS
+    return key
+
+def save_model_file(path, model, params):
+    """
+    Save model and parameters to a .mod file (JSON format).
+    Parameters are stored with plain ASCII keys (keyboard-friendly, no special chars).
+    Users can edit these files by hand.
+    """
+    if model not in MODEL_PARAMS:
+        return False, f"Unknown model: {model}"
+
+    # Get parameter specs for this model
+    param_specs = MODEL_PARAMS[model]
+
+    # Create parameter dictionary with plain ASCII keys
+    param_dict = {}
+    for i, (label, vmin, vmax, vinit) in enumerate(param_specs):
+        if i < len(params):
+            key = _label_to_key(label)
+            param_dict[key] = round(float(params[i]), 6)  # Round to 6 decimals for readability
+
+    data = {
+        "model": model,
+        "description": f"FaradayExplorer model file for {model}. Edit 'params' values to customize.",
+        "params": param_dict,
+    }
+    try:
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+        return True, f"Model saved to {os.path.basename(path)}"
+    except Exception as e:
+        return False, f"Error saving model: {e}"
+
+def load_model_file(path):
+    """
+    Load model and parameters from a .mod file.
+    Handles plain ASCII keys (new format).
+    Returns (model, params_list, error_msg) where params_list is ordered for widget assignment.
+    """
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+
+        model = data.get("model")
+        if model not in MODEL_PARAMS:
+            return None, None, f"Unknown model: {model}"
+
+        # Get parameter specs to reconstruct ordered list
+        param_specs = MODEL_PARAMS[model]
+        params_data = data.get("params", {})
+
+        # Convert dict with ASCII keys back to ordered list
+        params_list = []
+        for label, vmin, vmax, vinit in param_specs:
+            key = _label_to_key(label)
+            if key in params_data:
+                params_list.append(float(params_data[key]))
+            else:
+                # Fallback to default if key missing
+                params_list.append(vinit)
+
+        return model, params_list, None
+    except Exception as e:
+        return None, None, f"Error loading model: {e}"
+
+
 # ── Peak map caching ──────────────────────────────────────────────────────────
 
 def _get_peak_cache_path(fdf_path):
@@ -2784,6 +2883,60 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete workspace.")
 
+    def _load_model_dialog(self):
+        """Open file dialog to load a .mod file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Model File",
+            os.path.expanduser("~"),
+            "Model Files (*.mod);;All Files (*.*)"
+        )
+        if not path:
+            return
+
+        model, params, error = load_model_file(path)
+        if error:
+            QMessageBox.critical(self, "Error", error)
+            return
+
+        # Set the model and parameters
+        self.model_combo.setCurrentText(model)
+        self._on_model(model)  # Reconfigure param widgets
+
+        # Load parameter values
+        for i, val in enumerate(params):
+            if i < len(self._param_widgets):
+                self._param_widgets[i].spin.setValue(float(val))
+
+        QMessageBox.information(
+            self,
+            "Success",
+            f"Model '{model}' loaded from {os.path.basename(path)}"
+        )
+
+    def _save_model_dialog(self):
+        """Open file dialog to save current model as .mod file."""
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Model File",
+            os.path.expanduser("~"),
+            "Model Files (*.mod);;All Files (*.*)"
+        )
+        if not path:
+            return
+
+        # Ensure .mod extension
+        if not path.endswith('.mod'):
+            path += '.mod'
+
+        params = self._get_vals()
+        success, msg = save_model_file(path, self.model, params)
+
+        if success:
+            QMessageBox.information(self, "Success", msg)
+        else:
+            QMessageBox.critical(self, "Error", msg)
+
     def closeEvent(self, event):
         """Prompt to save workspace before closing if parameters have changed."""
         if self.has_data and self._workspace_dirty:
@@ -2835,6 +2988,23 @@ class MainWindow(QMainWindow):
         self.model_combo.addItems(list(MODEL_PARAMS.keys()))
         self.model_combo.currentTextChanged.connect(self._on_model)
         g.addWidget(self.model_combo)
+
+        # Load/Save model buttons
+        btn_layout = QHBoxLayout()
+        self.load_model_btn = QPushButton("Load .mod")
+        self.load_model_btn.setMaximumWidth(120)
+        self.load_model_btn.clicked.connect(self._load_model_dialog)
+        self.load_model_btn.setToolTip("Load model parameters from a .mod file")
+        btn_layout.addWidget(self.load_model_btn)
+
+        self.save_model_btn = QPushButton("Save .mod")
+        self.save_model_btn.setMaximumWidth(120)
+        self.save_model_btn.clicked.connect(self._save_model_dialog)
+        self.save_model_btn.setToolTip("Save current model and parameters to a .mod file")
+        btn_layout.addWidget(self.save_model_btn)
+        btn_layout.addStretch()
+        g.addLayout(btn_layout)
+
         vbox.addWidget(grp)
 
         # Parameters
