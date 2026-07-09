@@ -347,6 +347,122 @@ def model_fdf_clean(model, vals, phi, lam2):
     return np.abs(rm_synthesis(model_P(model, vals, lam2_dense), lam2_dense, phi))
 
 
+def model_fdf_clean_component(model, vals, phi, lam2, comp_idx=0):
+    """Intrinsic Faraday spectrum for a single component (no RMSF convolution).
+
+    Args:
+        model: model name (e.g., "m1", "m111")
+        vals: full parameter list
+        phi: Faraday depth array
+        lam2: wavelength-squared array
+        comp_idx: which component to extract (0, 1, 2, etc.)
+
+    Returns:
+        Amplitude array for just that component
+    """
+    dphi = phi[1] - phi[0]
+
+    def spike(p0, rm):
+        s = max(dphi * 0.4, 1.0)
+        return abs(p0) * np.exp(-0.5 * ((phi - rm) / s) ** 2)
+
+    def gauss_disp(p0, rm, sigma_rm):
+        s = np.sqrt(2.0) * abs(sigma_rm) if abs(sigma_rm) > dphi * 0.5 else dphi * 0.5
+        return abs(p0) * np.exp(-0.5 * ((phi - rm) / s) ** 2)
+
+    def rect_slab(p0, rm, drm):
+        rm1, rm2 = sorted([rm, rm + drm])
+        if abs(drm) < dphi:
+            return spike(p0, 0.5 * (rm1 + rm2))
+        return np.where((phi >= rm1) & (phi <= rm2), abs(p0), 0.0)
+
+    # Single-component models always return component 0
+    if model == "m1":
+        if comp_idx != 0:
+            return np.zeros_like(phi)
+        p0, c0, RM = vals
+        return spike(p0, RM)
+
+    if model == "m2":
+        if comp_idx != 0:
+            return np.zeros_like(phi)
+        p0, c0, RM, s = vals
+        return gauss_disp(p0, RM, s)
+
+    if model == "m5":
+        if comp_idx != 0:
+            return np.zeros_like(phi)
+        p0, c0, RM, dRM = vals
+        return rect_slab(p0, RM, dRM)
+
+    if model == "m6":
+        p1, c1, RM1, dRM1, p2, c2, RM2, dRM2 = vals
+        if comp_idx == 0:
+            return rect_slab(p1, RM1, dRM1)
+        elif comp_idx == 1:
+            return rect_slab(p2, RM2, dRM2)
+        else:
+            return np.zeros_like(phi)
+
+    if model == "m7":
+        if comp_idx != 0:
+            return np.zeros_like(phi)
+        p0, c0, RM, dRM, s = vals
+        from faraday_explorer import _internal_factor
+        lam2_dense = np.linspace(lam2.min(), lam2.max(), 4000)
+        P = model_P(model, vals, lam2_dense)
+        return np.abs(rm_synthesis(P, lam2_dense, phi))
+
+    if model == "m11":
+        p1, c1, RM1, p2, c2, RM2 = vals
+        if comp_idx == 0:
+            return spike(p1, RM1)
+        elif comp_idx == 1:
+            return spike(p2, RM2)
+        else:
+            return np.zeros_like(phi)
+
+    if model == "m3":
+        p1, c1, RM1, p2, c2, RM2, s = vals
+        if comp_idx == 0:
+            return gauss_disp(p1, RM1, s)
+        elif comp_idx == 1:
+            return gauss_disp(p2, RM2, s)
+        else:
+            return np.zeros_like(phi)
+
+    if model == "m4":
+        p1, c1, RM1, s1, p2, c2, RM2, s2 = vals
+        if comp_idx == 0:
+            return gauss_disp(p1, RM1, s1)
+        elif comp_idx == 1:
+            return gauss_disp(p2, RM2, s2)
+        else:
+            return np.zeros_like(phi)
+
+    if model == "m12":
+        if comp_idx != 0:
+            return np.zeros_like(phi)
+        p0, c0, RM_s, dRM, s_i, s_f = vals
+        from faraday_explorer import _internal_factor
+        lam2_dense = np.linspace(lam2.min(), lam2.max(), 4000)
+        P = model_P(model, vals, lam2_dense)
+        return np.abs(rm_synthesis(P, lam2_dense, phi))
+
+    if model == "m111":
+        p1, c1, RM1, p2, c2, RM2, p3, c3, RM3 = vals
+        if comp_idx == 0:
+            return spike(p1, RM1)
+        elif comp_idx == 1:
+            return spike(p2, RM2)
+        elif comp_idx == 2:
+            return spike(p3, RM3)
+        else:
+            return np.zeros_like(phi)
+
+    return np.zeros_like(phi)
+
+
 def _gaussian_restore(intrinsic_amp, phi, rmsf):
     """Convolve an intrinsic Faraday spectrum with a Gaussian restoring beam.
 
@@ -3815,9 +3931,8 @@ class MainWindow(QMainWindow):
                         comp_fdf = rm_synthesis(P_comp, self.lam2, self.phi)
                         comp_amp = np.abs(comp_fdf) * model_scale
                     else:
-                        comp_fdf_clean = model_fdf_clean(self.model, vals, self.phi, self.lam2)
-                        # For intrinsic, we need to handle component-wise — use amplitude
-                        comp_amp = np.abs(P_comp) * model_scale
+                        # For intrinsic (non-convolved): compute component-wise FDF
+                        comp_amp = model_fdf_clean_component(self.model, vals, self.phi, self.lam2, comp_idx=i) * model_scale
 
                     color = component_colors[i % len(component_colors)]
                     label = component_labels[i] if i < len(component_labels) else f"Comp {i+1}"
