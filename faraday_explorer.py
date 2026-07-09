@@ -2673,6 +2673,9 @@ class MainWindow(QMainWindow):
         # ── Build UI ──────────────────────────────────────────────────────────
         self._build_ui()
 
+        # ── Restore UI state ──────────────────────────────────────────────────
+        self._restore_fdf_display_state()
+
         # ── Apply theme ───────────────────────────────────────────────────────
         theme_dict = Theme.get_theme(self.theme)
         QApplication.instance().setStyleSheet(theme_dict["stylesheet"])
@@ -3379,8 +3382,36 @@ class MainWindow(QMainWindow):
         self._configure_params()
 
         # ── FDF display options ───────────────────────────────────────────────
-        disp_grp = QGroupBox("FDF Display")
-        disp_layout = QVBoxLayout(disp_grp)
+        # Create a container groupbox for the collapsible section
+        disp_grp = QGroupBox()
+        disp_grp.setFlat(True)  # Remove groupbox border, we'll style the header manually
+        disp_grp_layout = QVBoxLayout(disp_grp)
+        disp_grp_layout.setContentsMargins(0, 0, 0, 0)
+        disp_grp_layout.setSpacing(0)
+
+        # ── Header with toggle button ──
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(4)
+
+        self._fdf_display_toggle_btn = QPushButton("▼ FDF Display")
+        self._fdf_display_toggle_btn.setFlat(True)
+        self._fdf_display_toggle_btn.setMaximumWidth(200)
+        self._fdf_display_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._fdf_display_toggle_btn.setStyleSheet(
+            "QPushButton { text-align: left; padding: 4px 0px; font-weight: bold; border: none; }"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.1); }"
+        )
+        header_layout.addWidget(self._fdf_display_toggle_btn)
+        header_layout.addStretch()
+
+        disp_grp_layout.addWidget(header_widget)
+
+        # ── Controls container (will be toggled) ──
+        self._fdf_display_controls = QWidget()
+        disp_layout = QVBoxLayout(self._fdf_display_controls)
+        disp_layout.setContentsMargins(0, 0, 0, 0)
 
         self._convolve_cb = QCheckBox("Convolve model with Faraday beam (RMSF)")
         self._convolve_cb.setChecked(True)
@@ -3474,6 +3505,12 @@ class MainWindow(QMainWindow):
         ms_hbox.addWidget(self._model_scale_spin)
         self._model_scale_row.setVisible(False)
         disp_layout.addWidget(self._model_scale_row)
+
+        # Add controls container to the groupbox layout
+        disp_grp_layout.addWidget(self._fdf_display_controls)
+
+        # Connect toggle button to show/hide controls
+        self._fdf_display_toggle_btn.clicked.connect(self._toggle_fdf_display)
 
         vbox.addWidget(disp_grp)
 
@@ -3827,6 +3864,24 @@ class MainWindow(QMainWindow):
             self._model_scale_spin.setValue(float(self.real_fdf.max()) /
                                             max(float(self._last_amax), 1e-30))
         self._schedule_update()
+
+    def _toggle_fdf_display(self):
+        """Toggle FDF Display controls visibility and update button appearance."""
+        is_visible = self._fdf_display_controls.isVisible()
+        self._fdf_display_controls.setVisible(not is_visible)
+        # Update button text to show current state
+        arrow = "▼" if not is_visible else "►"
+        self._fdf_display_toggle_btn.setText(f"{arrow} FDF Display")
+        # Save state
+        self.settings.setValue("fdf_display_visible", not is_visible)
+
+    def _restore_fdf_display_state(self):
+        """Restore FDF Display controls visibility from settings."""
+        is_visible = self.settings.value("fdf_display_visible", True, type=bool)
+        self._fdf_display_controls.setVisible(is_visible)
+        # Update button appearance to match restored state
+        arrow = "▼" if is_visible else "►"
+        self._fdf_display_toggle_btn.setText(f"{arrow} FDF Display")
 
     def _open_coordinate_aperture(self):
         """Open non-modal coordinate aperture dialog for live adjustment.
