@@ -2974,6 +2974,7 @@ class MainWindow(QMainWindow):
             "convolve": self._convolve_cb.isChecked(),
             "model_scale": self._model_scale_spin.value(),
             "reveal_hidden": self._reveal_hidden_cb.isChecked(),
+            "show_total_model": self._show_total_model_cb.isChecked(),
         }
 
     def _apply_workspace_data(self, ws_data):
@@ -2992,6 +2993,7 @@ class MainWindow(QMainWindow):
         self._convolve_cb.setChecked(ws_data.get("convolve", True))
         self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
         self._reveal_hidden_cb.setChecked(ws_data.get("reveal_hidden", False))
+        self._show_total_model_cb.setChecked(ws_data.get("show_total_model", True))
         self._update()
 
     def _save_workspace_dialog(self):
@@ -3266,6 +3268,20 @@ class MainWindow(QMainWindow):
         )
         self._reveal_hidden_cb.toggled.connect(self._schedule_update)
         disp_layout.addWidget(self._reveal_hidden_cb)
+
+        self._show_total_model_cb = QCheckBox("Show total model")
+        self._show_total_model_cb.setChecked(True)
+        self._show_total_model_cb.setEnabled(False)  # Only enable when reveal_hidden is ON
+        self._show_total_model_cb.setToolTip(
+            "Display the combined total model line (black).\n"
+            "Only visible when 'Reveal hidden' is enabled.\n"
+            "Toggle to show/hide the combined model envelope."
+        )
+        self._show_total_model_cb.toggled.connect(self._schedule_update)
+        disp_layout.addWidget(self._show_total_model_cb)
+
+        # Connect reveal_hidden to enable/disable show_total_model checkbox
+        self._reveal_hidden_cb.toggled.connect(self._show_total_model_cb.setEnabled)
 
         # Manual model scale — visible only when normalise=OFF
         self._model_scale_row = QWidget()
@@ -3939,9 +3955,10 @@ class MainWindow(QMainWindow):
                     label = component_labels[i] if i < len(component_labels) else f"Comp {i+1}"
                     ax.plot(self.phi, comp_amp, color=color, lw=1.2, alpha=0.7, label=label)
 
-                # Plot combined model (overlapping perfectly, no offset needed)
-                ax.plot(self.phi, model_amp, color="black", lw=2.0,
-                        label=f"{model_lbl}", linestyle="-", zorder=10)
+                # Plot combined model (conditionally, when show_total_model is enabled)
+                if self._show_total_model_cb.isChecked():
+                    ax.plot(self.phi, model_amp, color="black", lw=2.0,
+                            label=f"{model_lbl}", linestyle="-", zorder=10)
 
             except Exception as e:
                 # Fallback: just plot the combined model if decomposition fails
