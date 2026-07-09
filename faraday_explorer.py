@@ -38,7 +38,7 @@ SPLASH_VIDEO_1  = os.path.join(_HERE, "splash.mp4")       # amani Astro branding
 SPLASH_VIDEO_2  = os.path.join(_HERE, "splash_app.mp4")   # Faraday Explorer title
 SPLASH_IMAGE    = os.path.join(_HERE, "splash_frame.png") # static fallback
 SPLASH_WIDTH    = 500   # display width in pixels (height scaled proportionally)
-SPLASH_EXTRA_MS = 1000  # ms to hold last frame of video 2 before closing
+SPLASH_EXTRA_MS = 500   # ms to hold last frame of video 2 before closing (2x faster)
 
 # Resolve ffmpeg/ffprobe from the conda env's bin (same dir as sys.executable).
 # The launcher runs Python directly without `conda activate`, so the env's bin
@@ -1848,7 +1848,7 @@ class VideoSplash(QSplashScreen):
             frames = self._v1 if self._phase == 1 else self._v2
             if frames:
                 fps = self._fps1 if self._phase == 1 else self._fps2
-                self._frame_timer.setInterval(max(16, int(1000.0 / fps)))
+                self._frame_timer.setInterval(max(16, int(1000.0 / (fps * 2))))  # 2x faster
                 self._frame_timer.start()
             else:
                 self._on_video_done()
