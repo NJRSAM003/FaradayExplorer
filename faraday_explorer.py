@@ -4024,10 +4024,18 @@ class MainWindow(QMainWindow):
     def _draw_qu(self, P, freqs_G):
         ax = self.qu_ax
         ax.cla()
-        ax.set_facecolor("#fdfdfd")
+
+        # Apply theme colors
+        is_dark = self.theme == "dark"
+        bg_color = "#2d2d2d" if is_dark else "#fdfdfd"
+        text_color = "#e0e0e0" if is_dark else "#000000"
+        grid_color = "#444444" if is_dark else "#cccccc"
+        line_color = "#555555" if is_dark else "#000000"
+
+        ax.set_facecolor(bg_color)
         ax.plot(freqs_G, P.real, color="royalblue",  lw=1.5, label="q model")
         ax.plot(freqs_G, P.imag, color="darkorange", lw=1.5, label="u model")
-        ax.axhline(0, color="k", lw=0.5, ls=":", alpha=0.5)
+        ax.axhline(0, color=line_color, lw=0.5, ls=":", alpha=0.5)
 
         if self.has_qu and self.real_q is not None:
             ax.scatter(freqs_G, self.real_q, color="royalblue",  s=55,
@@ -4035,13 +4043,20 @@ class MainWindow(QMainWindow):
             ax.scatter(freqs_G, self.real_u, color="darkorange", s=55,
                        marker="s", zorder=5, label="u data (U/I)")
 
-        ax.set_xlabel("Frequency  [GHz]")
-        ax.set_ylabel("Fractional polarisation  (Q/I,  U/I)")
-        ax.set_title(f"q & u vs Frequency  |  model {self.model}", loc="left", pad=8)
+        ax.set_xlabel("Frequency  [GHz]", color=text_color)
+        ax.set_ylabel("Fractional polarisation  (Q/I,  U/I)", color=text_color)
+        ax.set_title(f"q & u vs Frequency  |  model {self.model}", loc="left", pad=8, color=text_color)
+        ax.tick_params(colors=text_color)
+
+        # Color spines
+        for spine in ax.spines.values():
+            spine.set_color(text_color)
+
         # Place legend at top right above plot, horizontal orientation (multiple columns)
         ax.legend(fontsize=8, loc="upper right", bbox_to_anchor=(1.0, 1.15),
-                 ncol=4, framealpha=0.9, frameon=True, borderpad=0.8)
-        ax.grid(True, alpha=0.2)
+                 ncol=4, framealpha=0.9, frameon=True, borderpad=0.8,
+                 facecolor=bg_color, edgecolor=text_color, labelcolor=text_color)
+        ax.grid(True, alpha=0.2, color=grid_color)
         self.qu_fig.subplots_adjust(top=0.80)  # Make room for legend at top
         self.qu_canvas.draw_idle()
 
@@ -4055,7 +4070,15 @@ class MainWindow(QMainWindow):
             if axis is not ax:
                 axis.remove()
         ax.cla()
-        ax.set_facecolor("#fdfdfd")
+
+        # Apply theme colors
+        is_dark = self.theme == "dark"
+        bg_color = "#2d2d2d" if is_dark else "#fdfdfd"
+        text_color = "#e0e0e0" if is_dark else "#000000"
+        grid_color = "#444444" if is_dark else "#cccccc"
+        annotation_bg = "#3d3d3d" if is_dark else "#ffffff"
+
+        ax.set_facecolor(bg_color)
 
         # ── Model amplitude: scale to data peak (ON) or manual spinbox (OFF) ──
         has_data = self.real_fdf is not None and self.real_fdf.max() > 0
@@ -4085,11 +4108,12 @@ class MainWindow(QMainWindow):
         # We set ax2 ylim so RMSF peak (1.0) appears at 50 % of plot height.
         ax2 = ax.twinx()
         ax2.set_ylim(0, 1.25)   # RMSF peak=1.0 at RM=0 with 0.25 headroom
-        ax2.tick_params(axis='y', labelcolor="gray", labelsize=6)
+        rmsf_color = "#888888" if is_dark else "gray"
+        ax2.tick_params(axis='y', labelcolor=rmsf_color, labelsize=6)
         if self._show_rmsf:
-            ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color="gray")
-            ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color="gray", zorder=1)
-            ax2.plot(self.phi, self.rmsf, color="gray", lw=0.8,
+            ax2.set_ylabel("RMSF  (normalised)", fontsize=7, color=rmsf_color)
+            ax2.fill_between(self.phi, self.rmsf, alpha=0.15, color=rmsf_color, zorder=1)
+            ax2.plot(self.phi, self.rmsf, color=rmsf_color, lw=0.8,
                      ls="--", alpha=0.55, label="RMSF (norm.)", zorder=1)
         # Draw RMSF behind the main data lines
         ax2.set_zorder(ax.get_zorder() - 1)
@@ -4159,7 +4183,7 @@ class MainWindow(QMainWindow):
                     ax.annotate(f"φ={phi_pk:+.1f}", xy=(phi_pk, a_pk),
                                 xytext=(5, 3), textcoords="offset points",
                                 fontsize=7, color="steelblue",
-                                bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                bbox=dict(boxstyle="round,pad=0.2", fc=annotation_bg,
                                           ec="steelblue", alpha=0.85, lw=0.5))
 
         # ── Real FDF overlay ──────────────────────────────────────────────────
@@ -4184,24 +4208,30 @@ class MainWindow(QMainWindow):
                         ax.annotate(f"φ={phi_pk:+.0f}", xy=(phi_pk, a_pk),
                                     xytext=(-4, 8), textcoords="offset points",
                                     fontsize=7, color="darkorange",
-                                    bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                    bbox=dict(boxstyle="round,pad=0.2", fc=annotation_bg,
                                               ec="darkorange", alpha=0.85, lw=0.5))
 
         norm_note = ("model scaled to data peak" if (has_data and normalise)
                      else f"model ×{model_scale:.3g}" if not normalise
                      else "model: fractional pol.")
         beam_note = "RMSF-convolved" if convolved else "intrinsic — no RMSF"
-        ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]")
-        ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)")
-        ax.set_title(f"FDF Comparison  |  model {self.model}  |  {beam_note}")
+        ax.set_xlabel("Faraday Depth  φ  [rad m⁻²]", color=text_color)
+        ax.set_ylabel(f"|FDF(φ)|  ({norm_note};  data: Jy/RMSF)", color=text_color)
+        ax.set_title(f"FDF Comparison  |  model {self.model}  |  {beam_note}", color=text_color)
+        ax.tick_params(colors=text_color)
+
+        # Color spines
+        for spine in ax.spines.values():
+            spine.set_color(text_color)
 
         # Combined legend from both axes
         lines1, labs1 = ax.get_legend_handles_labels()
         lines2, labs2 = ax2.get_legend_handles_labels()
         ax.legend(lines1 + lines2, labs1 + labs2,
-                  fontsize=7.5, loc="upper right", framealpha=0.85)
+                  fontsize=7.5, loc="upper right", framealpha=0.85,
+                  facecolor=bg_color, edgecolor=text_color, labelcolor=text_color)
 
-        ax.grid(True, alpha=0.2)
+        ax.grid(True, alpha=0.2, color=grid_color)
         # Auto-extend x-axis to include real data range.  If phi_data values
         # look like frequencies (> 1e5) rather than rad/m² the data is likely
         # from a frequency cube — warn once and use its range so at least the
