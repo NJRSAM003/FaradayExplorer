@@ -221,6 +221,79 @@ def rm_synthesis(P, lam2, phi):
     return (np.exp(-2j * np.outer(phi, lam2)) @ P) / len(lam2)
 
 
+def model_P_components(model, vals, lam2):
+    """
+    Extract individual component contributions for multi-component models.
+    Returns list of component polarizations: [P_comp1, P_comp2, ...].
+    Single-component models return [P_total].
+    """
+    exp, rad = np.exp, np.deg2rad
+
+    if model == "m1":
+        p0, c0, RM = vals
+        P = p0 * exp(2j * (rad(c0) + RM * lam2))
+        return [P]
+
+    if model == "m2":
+        p0, c0, RM, s = vals
+        P = p0 * exp(2j * (rad(c0) + RM * lam2)) * exp(-2.0 * s**2 * lam2**2)
+        return [P]
+
+    if model == "m5":
+        p0, c0, RM, dRM = vals
+        from faraday_explorer import _burn_slab
+        P = _burn_slab(p0, c0, RM, dRM, lam2)
+        return [P]
+
+    if model == "m6":
+        p1, c1, RM1, dRM1, p2, c2, RM2, dRM2 = vals
+        from faraday_explorer import _burn_slab
+        P1 = _burn_slab(p1, c1, RM1, dRM1, lam2)
+        P2 = _burn_slab(p2, c2, RM2, dRM2, lam2)
+        return [P1, P2]
+
+    if model == "m7":
+        p0, c0, RM, dRM, s = vals
+        from faraday_explorer import _internal_factor
+        P = p0 * exp(2j * (rad(c0) + RM * lam2)) * _internal_factor(dRM, s, lam2)
+        return [P]
+
+    if model == "m11":
+        p1, c1, RM1, p2, c2, RM2 = vals
+        P1 = p1 * exp(2j * (rad(c1) + RM1 * lam2))
+        P2 = p2 * exp(2j * (rad(c2) + RM2 * lam2))
+        return [P1, P2]
+
+    if model == "m3":
+        p1, c1, RM1, p2, c2, RM2, s = vals
+        P1 = p1 * exp(2j * (rad(c1) + RM1 * lam2)) * exp(-2.0 * s**2 * lam2**2)
+        P2 = p2 * exp(2j * (rad(c2) + RM2 * lam2)) * exp(-2.0 * s**2 * lam2**2)
+        return [P1, P2]
+
+    if model == "m4":
+        p1, c1, RM1, s1, p2, c2, RM2, s2 = vals
+        P1 = p1 * exp(2j * (rad(c1) + RM1 * lam2)) * exp(-2.0 * s1**2 * lam2**2)
+        P2 = p2 * exp(2j * (rad(c2) + RM2 * lam2)) * exp(-2.0 * s2**2 * lam2**2)
+        return [P1, P2]
+
+    if model == "m12":
+        p0, c0, RM_s, dRM, s_i, s_f = vals
+        from faraday_explorer import _internal_factor
+        P = (p0 * exp(2j * (rad(c0) + RM_s * lam2))
+             * _internal_factor(dRM, s_i, lam2)
+             * exp(-2.0 * s_f**2 * lam2**2))
+        return [P]
+
+    if model == "m111":
+        p1, c1, RM1, p2, c2, RM2, p3, c3, RM3 = vals
+        P1 = p1 * exp(2j * (rad(c1) + RM1 * lam2))
+        P2 = p2 * exp(2j * (rad(c2) + RM2 * lam2))
+        P3 = p3 * exp(2j * (rad(c3) + RM3 * lam2))
+        return [P1, P2, P3]
+
+    raise ValueError(f"Unknown model: {model!r}")
+
+
 def model_fdf_clean(model, vals, phi, lam2):
     """Intrinsic Faraday spectrum — no RMSF convolution.
 
@@ -2784,6 +2857,7 @@ class MainWindow(QMainWindow):
             "normalise": self._normalise_cb.isChecked(),
             "convolve": self._convolve_cb.isChecked(),
             "model_scale": self._model_scale_spin.value(),
+            "reveal_hidden": self._reveal_hidden_cb.isChecked(),
         }
 
     def _apply_workspace_data(self, ws_data):
@@ -2801,6 +2875,7 @@ class MainWindow(QMainWindow):
         self._normalise_cb.setChecked(ws_data.get("normalise", True))
         self._convolve_cb.setChecked(ws_data.get("convolve", True))
         self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
+        self._reveal_hidden_cb.setChecked(ws_data.get("reveal_hidden", False))
         self._update()
 
     def _save_workspace_dialog(self):
@@ -3065,6 +3140,16 @@ class MainWindow(QMainWindow):
         )
         self._normalise_cb.toggled.connect(self._on_normalise_toggled)
         disp_layout.addWidget(self._normalise_cb)
+
+        self._reveal_hidden_cb = QCheckBox("Reveal hidden")
+        self._reveal_hidden_cb.setChecked(False)
+        self._reveal_hidden_cb.setToolTip(
+            "Show individual component peaks overlaid with different colors.\n"
+            "Useful for multi-component models (M3, M4, M111) where peaks may overlap.\n"
+            "The combined total is rendered above individual components so both are visible."
+        )
+        self._reveal_hidden_cb.toggled.connect(self._schedule_update)
+        disp_layout.addWidget(self._reveal_hidden_cb)
 
         # Manual model scale — visible only when normalise=OFF
         self._model_scale_row = QWidget()
@@ -3712,8 +3797,43 @@ class MainWindow(QMainWindow):
             ax.axvline(rm, color=RM_COLOURS[j % 3], lw=0.9, ls=":", alpha=0.65,
                        label=f"RM{sub[j]} input = {rm:+.0f}")
 
-        # ── Model FDF ─────────────────────────────────────────────────────────
-        ax.plot(self.phi, model_amp, color="steelblue", lw=1.8, label=model_lbl)
+        # ── Model FDF with optional component decomposition ───────────────────
+        reveal_hidden = self._reveal_hidden_cb.isChecked()
+
+        if reveal_hidden:
+            # Compute individual component FDFs
+            vals = self._get_vals()
+            component_colors = ["#d62728", "#2ca02c", "#ff7f0e"]  # Red, Green, Orange
+            component_labels = ["Component 1", "Component 2", "Component 3"]
+
+            try:
+                P_components = model_P_components(self.model, vals, self.lam2)
+
+                # Plot each component with a different color
+                for i, P_comp in enumerate(P_components):
+                    if convolved:
+                        comp_fdf = rm_synthesis(P_comp, self.lam2, self.phi)
+                        comp_amp = np.abs(comp_fdf) * model_scale
+                    else:
+                        comp_fdf_clean = model_fdf_clean(self.model, vals, self.phi, self.lam2)
+                        # For intrinsic, we need to handle component-wise — use amplitude
+                        comp_amp = np.abs(P_comp) * model_scale
+
+                    color = component_colors[i % len(component_colors)]
+                    label = component_labels[i] if i < len(component_labels) else f"Comp {i+1}"
+                    ax.plot(self.phi, comp_amp, color=color, lw=1.2, alpha=0.7, label=label)
+
+                # Plot combined model offset slightly above (so it doesn't hide components)
+                offset = 0.08 * model_peak
+                ax.plot(self.phi, model_amp + offset, color="black", lw=2.0,
+                        label=f"{model_lbl} (offset)", linestyle="-", zorder=10)
+
+            except Exception as e:
+                # Fallback: just plot the combined model if decomposition fails
+                ax.plot(self.phi, model_amp, color="steelblue", lw=1.8, label=model_lbl)
+        else:
+            # Standard: just plot combined model
+            ax.plot(self.phi, model_amp, color="steelblue", lw=1.8, label=model_lbl)
 
         dphi    = abs(self.phi[1] - self.phi[0]) if len(self.phi) > 1 else 0.5
         min_sep = max(1, int(15.0 / dphi))
