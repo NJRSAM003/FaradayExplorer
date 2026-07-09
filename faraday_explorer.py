@@ -2964,9 +2964,39 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._apply_default_sizes)
 
     def _get_current_workspace_data(self):
-        """Capture current model and parameter state."""
+        """Capture complete application state: model, parameters, aperture, zoom, clipping, display settings."""
         n = len(MODEL_PARAMS[self.model])
         params = [self._param_widgets[i].value() for i in range(n)]
+
+        # Aperture state
+        aperture_data = None
+        if self.map_canvas and hasattr(self.map_canvas, '_patch') and self.map_canvas._patch is not None:
+            patch = self.map_canvas._patch
+            cx, cy = patch.center
+            aperture_data = {
+                "cx": float(cx),
+                "cy": float(cy),
+                "semi_major": float(patch.width / 2),
+                "semi_minor": float(patch.height / 2),
+                "angle": float(patch.angle),
+            }
+
+        # Image zoom/pan state
+        image_zoom = None
+        if self.map_canvas:
+            xlim = self.map_canvas.ax.get_xlim()
+            ylim = self.map_canvas.ax.get_ylim()
+            image_zoom = {
+                "xlim": [float(xlim[0]), float(xlim[1])],
+                "ylim": [float(ylim[0]), float(ylim[1])],
+            }
+
+        # Image clipping and colormap settings
+        image_settings = {
+            "colormap": self._map_cmap_cb.currentText(),
+            "clipping_pct": float(self._map_clip_cb.currentData()),
+        }
+
         return {
             "model": self.model,
             "params": params,
@@ -2978,20 +3008,24 @@ class MainWindow(QMainWindow):
             "show_peak_lines": self._show_peak_lines,
             "show_peak_labels": self._show_peak_labels,
             "show_rmsf": self._show_rmsf,
+            "aperture": aperture_data,
+            "image_zoom": image_zoom,
+            "image_settings": image_settings,
         }
 
     def _apply_workspace_data(self, ws_data):
-        """Restore model and parameter state from workspace."""
+        """Restore complete application state from workspace: model, parameters, aperture, zoom, clipping, display."""
         if not ws_data:
             return
 
+        # Restore model and parameters
         self._on_model(ws_data.get("model", "m1"))
-
         params = ws_data.get("params", [])
         for i, val in enumerate(params):
             if i < len(self._param_widgets):
                 self._param_widgets[i].spin.setValue(float(val))
 
+        # Restore FDF display settings
         self._normalise_cb.setChecked(ws_data.get("normalise", True))
         self._convolve_cb.setChecked(ws_data.get("convolve", True))
         self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
@@ -3000,6 +3034,51 @@ class MainWindow(QMainWindow):
         self._show_peak_lines = ws_data.get("show_peak_lines", True)
         self._show_peak_labels = ws_data.get("show_peak_labels", True)
         self._show_rmsf = ws_data.get("show_rmsf", True)
+
+        # Restore image settings (colormap, clipping)
+        image_settings = ws_data.get("image_settings", {})
+        if image_settings:
+            colormap = image_settings.get("colormap")
+            clipping_pct = image_settings.get("clipping_pct")
+            if colormap:
+                idx = self._map_cmap_cb.findText(colormap)
+                if idx >= 0:
+                    self._map_cmap_cb.setCurrentIndex(idx)
+            if clipping_pct:
+                idx = self._map_clip_cb.findData(clipping_pct)
+                if idx >= 0:
+                    self._map_clip_cb.setCurrentIndex(idx)
+
+        # Restore aperture if it was saved
+        aperture_data = ws_data.get("aperture")
+        if aperture_data and self.map_canvas:
+            cx = aperture_data.get("cx")
+            cy = aperture_data.get("cy")
+            semi_major = aperture_data.get("semi_major")
+            semi_minor = aperture_data.get("semi_minor")
+            angle = aperture_data.get("angle")
+            if all(v is not None for v in [cx, cy, semi_major, semi_minor, angle]):
+                # Create and set the aperture patch
+                import matplotlib.patches as mpatches
+                patch = mpatches.Ellipse(
+                    (cx, cy), 2 * semi_major, 2 * semi_minor,
+                    angle=angle, fill=False, edgecolor="cyan", lw=1.5
+                )
+                if self.map_canvas._patch:
+                    self.map_canvas._patch.remove()
+                self.map_canvas.ax.add_patch(patch)
+                self.map_canvas._patch = patch
+                self.map_canvas._aperture_finalised = True
+
+        # Restore image zoom/pan
+        image_zoom = ws_data.get("image_zoom")
+        if image_zoom and self.map_canvas:
+            xlim = image_zoom.get("xlim")
+            ylim = image_zoom.get("ylim")
+            if xlim and ylim:
+                self.map_canvas.ax.set_xlim(xlim)
+                self.map_canvas.ax.set_ylim(ylim)
+
         self._update()
 
     def _save_workspace_dialog(self):
