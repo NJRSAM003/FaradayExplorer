@@ -3911,7 +3911,7 @@ class MainWindow(QMainWindow):
         sub = "₁₂₃"
         for j, rm in enumerate(self._rm_vals()):
             ax.axvline(rm, color=RM_COLOURS[j % 3], lw=0.9, ls=":", alpha=0.65,
-                       label=f"RM{sub[j]} input = {rm:+.0f}")
+                       label=f"RM{sub[j]} input = {rm:+.2f}")
 
         # ── Model FDF with optional component decomposition ───────────────────
         reveal_hidden = self._reveal_hidden_cb.isChecked()
@@ -3931,17 +3931,17 @@ class MainWindow(QMainWindow):
                         comp_fdf = rm_synthesis(P_comp, self.lam2, self.phi)
                         comp_amp = np.abs(comp_fdf) * model_scale
                     else:
-                        # For intrinsic (non-convolved): compute component-wise FDF
-                        comp_amp = model_fdf_clean_component(self.model, vals, self.phi, self.lam2, comp_idx=i) * model_scale
+                        # For intrinsic (non-convolved): compute component-wise FDF with Gaussian restoration
+                        comp_amp_raw = model_fdf_clean_component(self.model, vals, self.phi, self.lam2, comp_idx=i)
+                        comp_amp = _gaussian_restore(comp_amp_raw, self.phi, self.rmsf) * model_scale
 
                     color = component_colors[i % len(component_colors)]
                     label = component_labels[i] if i < len(component_labels) else f"Comp {i+1}"
                     ax.plot(self.phi, comp_amp, color=color, lw=1.2, alpha=0.7, label=label)
 
-                # Plot combined model offset slightly above (so it doesn't hide components)
-                offset = 0.08 * model_peak
-                ax.plot(self.phi, model_amp + offset, color="black", lw=2.0,
-                        label=f"{model_lbl} (offset)", linestyle="-", zorder=10)
+                # Plot combined model (overlapping perfectly, no offset needed)
+                ax.plot(self.phi, model_amp, color="black", lw=2.0,
+                        label=f"{model_lbl}", linestyle="-", zorder=10)
 
             except Exception as e:
                 # Fallback: just plot the combined model if decomposition fails
