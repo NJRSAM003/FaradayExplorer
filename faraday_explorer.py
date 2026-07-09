@@ -2975,6 +2975,9 @@ class MainWindow(QMainWindow):
             "model_scale": self._model_scale_spin.value(),
             "reveal_hidden": self._reveal_hidden_cb.isChecked(),
             "show_total_model": self._show_total_model_cb.isChecked(),
+            "show_peak_lines": self._show_peak_lines,
+            "show_peak_labels": self._show_peak_labels,
+            "show_rmsf": self._show_rmsf,
         }
 
     def _apply_workspace_data(self, ws_data):
@@ -2994,6 +2997,9 @@ class MainWindow(QMainWindow):
         self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
         self._reveal_hidden_cb.setChecked(ws_data.get("reveal_hidden", False))
         self._show_total_model_cb.setChecked(ws_data.get("show_total_model", True))
+        self._show_peak_lines = ws_data.get("show_peak_lines", True)
+        self._show_peak_labels = ws_data.get("show_peak_labels", True)
+        self._show_rmsf = ws_data.get("show_rmsf", True)
         self._update()
 
     def _save_workspace_dialog(self):
