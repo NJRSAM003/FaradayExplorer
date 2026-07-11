@@ -3459,33 +3459,41 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load workspace '{name}'.")
 
     def _manage_workspaces_dialog(self):
-        """Show dialog to manage (delete) workspaces."""
+        """Show dialog to manage (delete) workspaces.
+
+        After deletion, the dialog stays open and allows immediate deletion of another workspace.
+        The load menu is refreshed to reflect deletions.
+        """
         if not self.has_data:
             QMessageBox.warning(self, "No Data", "Load a dataset first.")
             return
 
-        workspaces = Workspace.list_workspaces(self._fdf_path)
-        if not workspaces:
-            QMessageBox.information(self, "No Workspaces",
-                                  "No saved workspaces for this dataset.")
-            return
+        while True:
+            workspaces = Workspace.list_workspaces(self._fdf_path)
+            if not workspaces:
+                QMessageBox.information(self, "No Workspaces",
+                                      "No saved workspaces for this dataset.")
+                break
 
-        ws_names = [w.replace('.json', '') for w in workspaces]
-        name, ok = QInputDialog.getItem(
-            self, "Delete Workspace", "Select workspace to delete:", ws_names, 0, False
-        )
-        if not ok:
-            return
+            ws_names = [w.replace('.json', '') for w in workspaces]
+            name, ok = QInputDialog.getItem(
+                self, "Delete Workspace", "Select workspace to delete:", ws_names, 0, False
+            )
+            if not ok:
+                break
 
-        reply = QMessageBox.question(
-            self, "Confirm Delete", f"Delete workspace '{name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            if Workspace.delete_workspace(self._fdf_path, name):
-                QMessageBox.information(self, "Success", f"Workspace '{name}' deleted.")
-            else:
-                QMessageBox.critical(self, "Error", "Failed to delete workspace.")
+            reply = QMessageBox.question(
+                self, "Confirm Delete", f"Delete workspace '{name}'?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                if Workspace.delete_workspace(self._fdf_path, name):
+                    # Refresh the load menu to remove the deleted workspace
+                    self._populate_load_workspace_menu()
+                    QMessageBox.information(self, "Success", f"Workspace '{name}' deleted.")
+                    # Loop continues to allow deleting another workspace immediately
+                else:
+                    QMessageBox.critical(self, "Error", "Failed to delete workspace.")
 
     def _load_model_dialog(self):
         """Open file dialog to load a .model file."""
