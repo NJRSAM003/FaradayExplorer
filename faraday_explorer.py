@@ -2808,7 +2808,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, fits_path, i_path, q_path, u_path, freqs,
                  map_step=MAP_STEP, beam_info=None, full_stokes_path=None,
-                 _preloaded=None, mod_file_to_open=None):
+                 _preloaded=None, mod_file_to_open=None, phi_override=None):
         super().__init__()
         self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
@@ -2821,6 +2821,8 @@ class MainWindow(QMainWindow):
         self.freqs  = freqs
         self.lam2   = make_lambda2(freqs)
         self.n_chan  = len(freqs)
+        # Store phi_override for later use in _sync_phi_grid
+        self.phi_override = phi_override
         self.phi     = np.linspace(PHI_MIN, PHI_MAX, N_PHI)
         self.rmsf    = np.abs(rm_synthesis(
             np.ones(self.n_chan, dtype=complex), self.lam2, self.phi))
@@ -2875,8 +2877,14 @@ class MainWindow(QMainWindow):
 
         Called after phi_data is populated so that the blue model FDF and
         the grey RMSF shading always span the full data extent.
+
+        If phi_override is set, use the user-specified range instead.
         """
-        if self.phi_data is not None and len(self.phi_data) > 1:
+        # Use phi_override if provided, otherwise use default constants or data range
+        if self.phi_override is not None:
+            lo = float(self.phi_override["min"])
+            hi = float(self.phi_override["max"])
+        elif self.phi_data is not None and len(self.phi_data) > 1:
             lo = min(PHI_MIN, float(self.phi_data.min()))
             hi = max(PHI_MAX, float(self.phi_data.max()))
         else:
@@ -3150,7 +3158,8 @@ class MainWindow(QMainWindow):
         win = MainWindow(p["fdf"], p["i"], p["q"], p["u"], freqs,
                          map_step=ms, beam_info=beam_info,
                          full_stokes_path=p.get("full_stokes"),
-                         _preloaded=loading.result_data)
+                         _preloaded=loading.result_data,
+                         phi_override=p.get("phi_override"))
         win.show()
         self.close()
 
@@ -4719,7 +4728,8 @@ def main():
 
     win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info,
                      full_stokes_path=full_stokes_path, _preloaded=preloaded,
-                     mod_file_to_open=mod_file_to_open)
+                     mod_file_to_open=mod_file_to_open,
+                     phi_override=p.get("phi_override") if 'p' in locals() else None)
     win.show()
     sys.exit(app.exec_())
 
