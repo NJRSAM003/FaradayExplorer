@@ -2336,11 +2336,11 @@ class Workspace:
             return False
 
 
-# ── Model file save/load (.mod format) ────────────────────────────────────────
+# ── Model file save/load (.model format) ────────────────────────────────────────
 
 def _label_to_key(label):
     """
-    Convert fancy display label to plain ASCII key for .mod files.
+    Convert fancy display label to plain ASCII key for .model files.
     Examples:
       "p₀" → "p_0"
       "χ₀  [°]" → "chi_0_deg"
@@ -2373,7 +2373,7 @@ def _label_to_key(label):
 def _key_to_label(key, model):
     """
     Reverse mapping: convert ASCII key back to fancy label.
-    Used when loading .mod files to display in UI.
+    Used when loading .model files to display in UI.
     """
     # This is a fallback mapping for known patterns
     # The primary method is to match by order in MODEL_PARAMS
@@ -2381,7 +2381,7 @@ def _key_to_label(key, model):
 
 def save_model_file(path, model, params):
     """
-    Save model and parameters to a .mod file (JSON format).
+    Save model and parameters to a .model file (JSON format).
     Parameters are stored with plain ASCII keys (keyboard-friendly, no special chars).
     Users can edit these files by hand.
     """
@@ -2412,7 +2412,7 @@ def save_model_file(path, model, params):
 
 def load_model_file(path):
     """
-    Load model and parameters from a .mod file.
+    Load model and parameters from a .model file.
     Handles plain ASCII keys (new format).
     Returns (model, params_list, error_msg) where params_list is ordered for widget assignment.
     """
@@ -2732,7 +2732,8 @@ class FrequencyManualDialog(QDialog):
         layout = QVBoxLayout()
 
         layout.addWidget(QLabel(
-            "Enter frequencies separated by commas or newlines (in GHz):\n"
+            "Enter frequencies separated by commas or newlines (in GHz).\n"
+            "Frequencies will be converted to Hz automatically.\n"
             "Example: 1.4, 1.5, 1.6\n"
             "or:\n"
             "1.4\n1.5\n1.6"
@@ -2775,14 +2776,16 @@ class FrequencyManualDialog(QDialog):
             else:
                 parts = text.split('\n')
 
-            # Parse numeric values
+            # Parse numeric values (input is GHz, convert to Hz)
             frequencies = []
             for part in parts:
                 part = part.strip()
                 if part:
                     try:
-                        freq = float(part)
-                        frequencies.append(freq)
+                        freq_ghz = float(part)
+                        # Convert GHz to Hz
+                        freq_hz = freq_ghz * 1e9
+                        frequencies.append(freq_hz)
                     except ValueError:
                         QMessageBox.critical(self, "Error",
                             f"Invalid number: '{part}'")
@@ -2859,10 +2862,10 @@ class MainWindow(QMainWindow):
         # ── Update once to initialise plots ──────────────────────────────────
         self._update()
 
-        # ── Handle .mod file opening from file association ────────────────────
+        # ── Handle .model file opening from file association ────────────────────
         if mod_file_to_open:
-            print(f"[INFO] .mod file provided: {mod_file_to_open} (workspace preserved)")
-            # In the future, this can load workspace state from .mod file
+            print(f"[INFO] .model file provided: {mod_file_to_open} (workspace preserved)")
+            # In the future, this can load workspace state from .model file
             # For now, just log that it was received
 
     # ── Data loading ──────────────────────────────────────────────────────────
@@ -3454,12 +3457,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", "Failed to delete workspace.")
 
     def _load_model_dialog(self):
-        """Open file dialog to load a .mod file."""
+        """Open file dialog to load a .model file."""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Load Model File",
             os.path.expanduser("~"),
-            "Model Files (*.mod);;All Files (*.*)"
+            "Model Files (*.model);;All Files (*.*)"
         )
         if not path:
             return
@@ -3485,19 +3488,19 @@ class MainWindow(QMainWindow):
         )
 
     def _save_model_dialog(self):
-        """Open file dialog to save current model as .mod file."""
+        """Open file dialog to save current model as .model file."""
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Model File",
             os.path.expanduser("~"),
-            "Model Files (*.mod);;All Files (*.*)"
+            "Model Files (*.model);;All Files (*.*)"
         )
         if not path:
             return
 
-        # Ensure .mod extension
-        if not path.endswith('.mod'):
-            path += '.mod'
+        # Ensure .model extension
+        if not path.endswith('.model'):
+            path += '.model'
 
         params = self._get_vals()
         success, msg = save_model_file(path, self.model, params)
@@ -3561,16 +3564,16 @@ class MainWindow(QMainWindow):
 
         # Load/Save model buttons
         btn_layout = QHBoxLayout()
-        self.load_model_btn = QPushButton("Load .mod")
+        self.load_model_btn = QPushButton("Load .model")
         self.load_model_btn.setMaximumWidth(120)
         self.load_model_btn.clicked.connect(self._load_model_dialog)
-        self.load_model_btn.setToolTip("Load model parameters from a .mod file")
+        self.load_model_btn.setToolTip("Load model parameters from a .model file")
         btn_layout.addWidget(self.load_model_btn)
 
-        self.save_model_btn = QPushButton("Save .mod")
+        self.save_model_btn = QPushButton("Save .model")
         self.save_model_btn.setMaximumWidth(120)
         self.save_model_btn.clicked.connect(self._save_model_dialog)
-        self.save_model_btn.setToolTip("Save current model and parameters to a .mod file")
+        self.save_model_btn.setToolTip("Save current model and parameters to a .model file")
         btn_layout.addWidget(self.save_model_btn)
         btn_layout.addStretch()
         g.addLayout(btn_layout)
@@ -4645,13 +4648,13 @@ def main():
     # ── Resolve file paths ────────────────────────────────────────────────────
     preloaded        = None
     full_stokes_path = None
-    mod_file_to_open = None  # Track .mod file for opening after app starts
+    mod_file_to_open = None  # Track .model file for opening after app starts
 
-    # Check if first positional arg is a .mod file (for file association)
-    if len(sys.argv) >= 2 and sys.argv[1].endswith('.mod'):
-        # .mod file provided via command line (file association) — open GUI, remember .mod file
+    # Check if first positional arg is a .model file (for file association)
+    if len(sys.argv) >= 2 and sys.argv[1].endswith('.model'):
+        # .model file provided via command line (file association) — open GUI, remember .model file
         mod_file_to_open = sys.argv[1]
-        print(f"File association: .mod file requested: {mod_file_to_open}")
+        print(f"File association: .model file requested: {mod_file_to_open}")
         # Fall through to GUI mode (LaunchDialog)
         cli_args = sys.argv[1:]
         sys.argv = [sys.argv[0]]  # Clear arguments so we fall through to GUI
