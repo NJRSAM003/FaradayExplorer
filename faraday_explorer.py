@@ -3252,6 +3252,7 @@ class MainWindow(QMainWindow):
         return {
             "model": self.model,
             "params": params,
+            "frequencies": self.freqs.tolist() if hasattr(self, 'freqs') and self.freqs is not None else None,
             "normalise": self._normalise_cb.isChecked(),
             "convolve": self._convolve_cb.isChecked(),
             "model_scale": self._model_scale_spin.value(),
@@ -3272,6 +3273,19 @@ class MainWindow(QMainWindow):
         """Restore complete application state from workspace: model, parameters, aperture, zoom, clipping, display."""
         if not ws_data:
             return
+
+        # Restore frequencies (if they were saved)
+        frequencies = ws_data.get("frequencies")
+        if frequencies is not None:
+            try:
+                self.freqs = np.array(frequencies, dtype=float)
+                self.n_chan = len(self.freqs)
+                self.lam2 = make_lambda2(self.freqs)
+                # Recalculate RMSF with restored frequencies
+                self.rmsf = np.abs(rm_synthesis(
+                    np.ones(self.n_chan, dtype=complex), self.lam2, self.phi))
+            except Exception as e:
+                print(f"[WARN] Failed to restore frequencies from workspace: {e}")
 
         # Restore model and parameters
         self._on_model(ws_data.get("model", "m1"))
