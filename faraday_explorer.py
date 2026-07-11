@@ -2248,17 +2248,13 @@ class LaunchDialog(QDialog):
             q    = self._q_edit.text()    or None
             u    = self._u_edit.text()    or None
             full_stokes = None
-        phi_override = None
-        if self._phi_override_cb.isChecked():
-            phi_override = {
-                "min": self._phi_min_spin.value(),
-                "max": self._phi_max_spin.value(),
-            }
-            self._cfg.setValue("phi_override", True)
-            self._cfg.setValue("phi_min", self._phi_min_spin.value())
-            self._cfg.setValue("phi_max", self._phi_max_spin.value())
-        else:
-            self._cfg.setValue("phi_override", False)
+        # Always create phi_override from spinbox values
+        phi_override = {
+            "min": self._phi_min_spin.value(),
+            "max": self._phi_max_spin.value(),
+        }
+        self._cfg.setValue("phi_min", self._phi_min_spin.value())
+        self._cfg.setValue("phi_max", self._phi_max_spin.value())
         self.paths = {
             "fdf":          self._fdf_edit.text(),
             "freq":         self._freq_edit.text(),
@@ -2823,7 +2819,13 @@ class MainWindow(QMainWindow):
         self.n_chan  = len(freqs)
         # Store phi_override for later use in _sync_phi_grid
         self.phi_override = phi_override
-        self.phi     = np.linspace(PHI_MIN, PHI_MAX, N_PHI)
+        # Initialize phi grid using phi_override if provided, otherwise use defaults
+        if phi_override is not None:
+            phi_lo = float(phi_override["min"])
+            phi_hi = float(phi_override["max"])
+        else:
+            phi_lo, phi_hi = PHI_MIN, PHI_MAX
+        self.phi     = np.linspace(phi_lo, phi_hi, N_PHI)
         self.rmsf    = np.abs(rm_synthesis(
             np.ones(self.n_chan, dtype=complex), self.lam2, self.phi))
         self.model   = "m1"
@@ -4596,12 +4598,15 @@ class MainWindow(QMainWindow):
         # look like frequencies (> 1e5) rather than rad/m² the data is likely
         # from a frequency cube — warn once and use its range so at least the
         # profile is visible.
+        # Use self.phi range (which respects user-specified override) as the base
+        phi_lo = float(self.phi[0])
+        phi_hi = float(self.phi[-1])
         if has_data and self.phi_data is not None:
             dlo = float(np.nanmin(self.phi_data))
             dhi = float(np.nanmax(self.phi_data))
-            ax.set_xlim(min(PHI_MIN, dlo), max(PHI_MAX, dhi))
+            ax.set_xlim(min(phi_lo, dlo), max(phi_hi, dhi))
         else:
-            ax.set_xlim(PHI_MIN, PHI_MAX)
+            ax.set_xlim(phi_lo, phi_hi)
 
         # Set y-axis limits (fixed or auto)
         if self._fix_ymax_cb.isChecked():
