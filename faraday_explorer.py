@@ -3242,6 +3242,7 @@ class MainWindow(QMainWindow):
         image_settings = {
             "colormap": self._map_cmap_cb.currentText(),
             "clipping_pct": float(self._map_clip_cb.currentData()),
+            "axis_type": self._map_axes_cb.currentData(),
         }
 
         # Pane layout state (QMainWindow dock/toolbar configuration)
@@ -3306,11 +3307,12 @@ class MainWindow(QMainWindow):
         self._fix_ymax_cb.setChecked(ws_data.get("fix_ymax", False))
         self._ymax_spin.setValue(ws_data.get("ymax_value", 0.010))
 
-        # Restore image settings (colormap, clipping)
+        # Restore image settings (colormap, clipping, axis type)
         image_settings = ws_data.get("image_settings", {})
         if image_settings:
             colormap = image_settings.get("colormap")
             clipping_pct = image_settings.get("clipping_pct")
+            axis_type = image_settings.get("axis_type")
             if colormap:
                 idx = self._map_cmap_cb.findText(colormap)
                 if idx >= 0:
@@ -3319,6 +3321,10 @@ class MainWindow(QMainWindow):
                 idx = self._map_clip_cb.findData(clipping_pct)
                 if idx >= 0:
                     self._map_clip_cb.setCurrentIndex(idx)
+            if axis_type:
+                idx = self._map_axes_cb.findData(axis_type)
+                if idx >= 0:
+                    self._map_axes_cb.setCurrentIndex(idx)
 
         # Restore aperture if it was saved
         aperture_data = ws_data.get("aperture")
