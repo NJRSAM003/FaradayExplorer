@@ -6,7 +6,7 @@ PyQt5 application: native controls, embedded matplotlib canvases.
 Run:  conda run -n faraday_explorer python3 faraday_explorer.py FDF.fits I.fits Q.fits U.fits freqFile.dat
 """
 
-import os, sys, json, subprocess
+import os, sys, json, subprocess, argparse
 import numpy as np
 from scipy.signal import find_peaks
 import matplotlib
@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QPushButton, QFileDialog,
     QCheckBox, QSpinBox, QMessageBox, QStackedWidget, QProgressBar,
     QToolButton, QMenu, QAction, QActionGroup, QInputDialog,
+    QPlainTextEdit, QTextEdit,
 )
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QLocale
@@ -2623,13 +2624,188 @@ class LoadingDialog(QDialog):
             self.reject()
 
 
+# ── Frequency loading dialogs ─────────────────────────────────────────────────
+
+class FrequencyFileDialog(QDialog):
+    """Dialog to load frequencies from a CSV/text file."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Load Frequency File")
+        self.setGeometry(100, 100, 500, 200)
+        self.frequencies = None
+
+        layout = QVBoxLayout()
+
+        # File selection button
+        self.file_label = QLabel("No file selected")
+        layout.addWidget(QLabel("Select a CSV or text file with frequencies (one per line, in GHz):"))
+        layout.addWidget(self.file_label)
+
+        btn_browse = QPushButton("Browse…")
+        btn_browse.clicked.connect(self._browse_file)
+        layout.addWidget(btn_browse)
+
+        # Preview
+        layout.addWidget(QLabel("Preview:"))
+        self.preview_text = QPlainTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setMaximumHeight(100)
+        layout.addWidget(self.preview_text)
+
+        # Status
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("Load")
+        btn_ok.clicked.connect(self._load_frequencies)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addWidget(btn_ok)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+        self.filepath = None
+
+    def _browse_file(self):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open Frequency File", "",
+            "Text Files (*.txt *.csv *.dat);;All Files (*)"
+        )
+        if filepath:
+            self.filepath = filepath
+            self.file_label.setText(os.path.basename(filepath))
+            self._preview_file()
+
+    def _preview_file(self):
+        """Preview the file contents."""
+        if not self.filepath or not os.path.exists(self.filepath):
+            self.preview_text.setPlainText("")
+            return
+
+        try:
+            with open(self.filepath, 'r') as f:
+                content = f.read(500)  # Read first 500 chars
+            self.preview_text.setPlainText(content)
+        except Exception as e:
+            self.preview_text.setPlainText(f"Error: {e}")
+
+    def _load_frequencies(self):
+        """Parse the frequency file and load frequencies."""
+        if not self.filepath or not os.path.exists(self.filepath):
+            QMessageBox.warning(self, "Error", "No file selected.")
+            return
+
+        try:
+            # Try numpy loadtxt first (most robust)
+            freqs = np.loadtxt(self.filepath)
+            if freqs.ndim == 0:  # Scalar
+                freqs = np.array([freqs])
+            elif freqs.ndim > 1:
+                # Try to flatten if it's 2D
+                freqs = freqs.flatten()
+
+            if len(freqs) == 0:
+                QMessageBox.warning(self, "Error", "No frequencies found in file.")
+                return
+
+            self.frequencies = freqs
+            self.status_label.setText(f"Loaded {len(freqs)} frequencies")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to parse file:\n{e}")
+
+
+class FrequencyManualDialog(QDialog):
+    """Dialog for manual frequency entry."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Enter Frequencies Manually")
+        self.setGeometry(100, 100, 500, 400)
+        self.frequencies = None
+
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel(
+            "Enter frequencies separated by commas or newlines (in GHz):\n"
+            "Example: 1.4, 1.5, 1.6\n"
+            "or:\n"
+            "1.4\n1.5\n1.6"
+        ))
+
+        # Text input
+        self.text_input = QPlainTextEdit()
+        layout.addWidget(self.text_input)
+
+        # Status
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: green;")
+        layout.addWidget(self.status_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("Load")
+        btn_ok.clicked.connect(self._parse_and_load)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addWidget(btn_ok)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def _parse_and_load(self):
+        """Parse the input text and load frequencies."""
+        text = self.text_input.toPlainText().strip()
+        if not text:
+            QMessageBox.warning(self, "Error", "Please enter at least one frequency.")
+            return
+
+        try:
+            # Split by comma or newline
+            parts = []
+            if ',' in text:
+                parts = text.split(',')
+            else:
+                parts = text.split('\n')
+
+            # Parse numeric values
+            frequencies = []
+            for part in parts:
+                part = part.strip()
+                if part:
+                    try:
+                        freq = float(part)
+                        frequencies.append(freq)
+                    except ValueError:
+                        QMessageBox.critical(self, "Error",
+                            f"Invalid number: '{part}'")
+                        return
+
+            if len(frequencies) == 0:
+                QMessageBox.warning(self, "Error", "No valid frequencies found.")
+                return
+
+            self.frequencies = np.array(frequencies)
+            self.status_label.setText(f"Parsed {len(frequencies)} frequencies")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error parsing input:\n{e}")
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
 
     def __init__(self, fits_path, i_path, q_path, u_path, freqs,
                  map_step=MAP_STEP, beam_info=None, full_stokes_path=None,
-                 _preloaded=None):
+                 _preloaded=None, mod_file_to_open=None):
         super().__init__()
         self.setWindowTitle("Faraday Explorer  —  Polarisation Model Viewer")
         self.resize(1400, 800)
@@ -2682,6 +2858,12 @@ class MainWindow(QMainWindow):
 
         # ── Update once to initialise plots ──────────────────────────────────
         self._update()
+
+        # ── Handle .mod file opening from file association ────────────────────
+        if mod_file_to_open:
+            print(f"[INFO] .mod file provided: {mod_file_to_open} (workspace preserved)")
+            # In the future, this can load workspace state from .mod file
+            # For now, just log that it was received
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -2840,6 +3022,15 @@ class MainWindow(QMainWindow):
         manage_ws_act.triggered.connect(self._manage_workspaces_dialog)
 
         fmenu.addSeparator()
+
+        # Frequency menu items
+        load_freq_file_act = fmenu.addAction("Load Frequency File…")
+        load_freq_file_act.triggered.connect(self._load_frequency_file)
+
+        enter_freq_manual_act = fmenu.addAction("Enter Frequencies Manually…")
+        enter_freq_manual_act.triggered.connect(self._enter_frequencies_manually)
+
+        fmenu.addSeparator()
         fmenu.addAction("Quit").triggered.connect(self.close)
 
         # ── View menu — lets user reopen any closed panel ─────────────────────
@@ -2977,6 +3168,44 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(self._qu_dock, self._fdf_dock, Qt.Vertical)
 
         QTimer.singleShot(0, self._apply_default_sizes)
+
+    def _load_frequency_file(self):
+        """Load frequencies from a CSV/text file and update RMSF calculations."""
+        dlg = FrequencyFileDialog(self)
+        if dlg.exec_() != QDialog.Accepted or dlg.frequencies is None:
+            return
+
+        try:
+            # Update frequencies and recalculate RMSF
+            self.freqs = dlg.frequencies
+            self.n_chan = len(self.freqs)
+            self.lam2 = make_lambda2(self.freqs)
+            self._sync_phi_grid()
+            self._update()
+            self.statusBar().showMessage(
+                f"Loaded {len(self.freqs)} frequencies. RMSF recalculated."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to update frequencies:\n{e}")
+
+    def _enter_frequencies_manually(self):
+        """Open dialog for manual frequency entry."""
+        dlg = FrequencyManualDialog(self)
+        if dlg.exec_() != QDialog.Accepted or dlg.frequencies is None:
+            return
+
+        try:
+            # Update frequencies and recalculate RMSF
+            self.freqs = dlg.frequencies
+            self.n_chan = len(self.freqs)
+            self.lam2 = make_lambda2(self.freqs)
+            self._sync_phi_grid()
+            self._update()
+            self.statusBar().showMessage(
+                f"Loaded {len(self.freqs)} frequencies. RMSF recalculated."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to update frequencies:\n{e}")
 
     def _get_current_workspace_data(self):
         """Capture complete application state: model, parameters, aperture, zoom, clipping, display settings."""
@@ -4416,8 +4645,21 @@ def main():
     # ── Resolve file paths ────────────────────────────────────────────────────
     preloaded        = None
     full_stokes_path = None
+    mod_file_to_open = None  # Track .mod file for opening after app starts
 
-    if len(sys.argv) >= 3:
+    # Check if first positional arg is a .mod file (for file association)
+    if len(sys.argv) >= 2 and sys.argv[1].endswith('.mod'):
+        # .mod file provided via command line (file association) — open GUI, remember .mod file
+        mod_file_to_open = sys.argv[1]
+        print(f"File association: .mod file requested: {mod_file_to_open}")
+        # Fall through to GUI mode (LaunchDialog)
+        cli_args = sys.argv[1:]
+        sys.argv = [sys.argv[0]]  # Clear arguments so we fall through to GUI
+        len_sys_argv = len(sys.argv)
+    else:
+        len_sys_argv = len(sys.argv)
+
+    if len_sys_argv >= 3:
         if len(sys.argv) == 3:
             fdf_path, freq_file = sys.argv[1], sys.argv[2]
             i_path = q_path = u_path = None
@@ -4453,7 +4695,8 @@ def main():
         preloaded = loading.result_data
 
     win = MainWindow(fdf_path, i_path, q_path, u_path, freqs, map_step, beam_info,
-                     full_stokes_path=full_stokes_path, _preloaded=preloaded)
+                     full_stokes_path=full_stokes_path, _preloaded=preloaded,
+                     mod_file_to_open=mod_file_to_open)
     win.show()
     sys.exit(app.exec_())
 
