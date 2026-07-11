@@ -3312,9 +3312,20 @@ class MainWindow(QMainWindow):
         self._model_scale_spin.setValue(ws_data.get("model_scale", 1.0))
         self._reveal_hidden_cb.setChecked(ws_data.get("reveal_hidden", False))
         self._show_total_model_cb.setChecked(ws_data.get("show_total_model", True))
-        self._show_peak_lines = ws_data.get("show_peak_lines", True)
-        self._show_peak_labels = ws_data.get("show_peak_labels", True)
-        self._show_rmsf = ws_data.get("show_rmsf", True)
+        # Restore Faraday Spectrum display toggles (Peak lines, Peak labels, RMSF shading)
+        show_peak_lines = ws_data.get("show_peak_lines", True)
+        show_peak_labels = ws_data.get("show_peak_labels", True)
+        show_rmsf = ws_data.get("show_rmsf", True)
+        self._show_peak_lines = show_peak_lines
+        self._show_peak_labels = show_peak_labels
+        self._show_rmsf = show_rmsf
+        # Update QAction checked states to match restored values
+        if hasattr(self, '_act_peak_lines'):
+            self._act_peak_lines.setChecked(show_peak_lines)
+        if hasattr(self, '_act_peak_labels'):
+            self._act_peak_labels.setChecked(show_peak_labels)
+        if hasattr(self, '_act_rmsf_shade'):
+            self._act_rmsf_shade.setChecked(show_rmsf)
         self._fix_ymax_cb.setChecked(ws_data.get("fix_ymax", False))
         self._ymax_spin.setValue(ws_data.get("ymax_value", 0.010))
 
@@ -3833,12 +3844,12 @@ class MainWindow(QMainWindow):
         )
         menu = QMenu(display_btn)
 
-        act_lines  = QAction("Peak lines",  menu, checkable=True, checked=True)
-        act_labels = QAction("Peak labels", menu, checkable=True, checked=True)
-        act_rmsf   = QAction("RMSF shading", menu, checkable=True, checked=True)
-        menu.addAction(act_lines)
-        menu.addAction(act_labels)
-        menu.addAction(act_rmsf)
+        self._act_peak_lines  = QAction("Peak lines",  menu, checkable=True, checked=True)
+        self._act_peak_labels = QAction("Peak labels", menu, checkable=True, checked=True)
+        self._act_rmsf_shade  = QAction("RMSF shading", menu, checkable=True, checked=True)
+        menu.addAction(self._act_peak_lines)
+        menu.addAction(self._act_peak_labels)
+        menu.addAction(self._act_rmsf_shade)
 
         def _toggle_lines(on):
             self._show_peak_lines = on
@@ -3850,9 +3861,9 @@ class MainWindow(QMainWindow):
             self._show_rmsf = on
             self._update()
 
-        act_lines.toggled.connect(_toggle_lines)
-        act_labels.toggled.connect(_toggle_labels)
-        act_rmsf.toggled.connect(_toggle_rmsf)
+        self._act_peak_lines.toggled.connect(_toggle_lines)
+        self._act_peak_labels.toggled.connect(_toggle_labels)
+        self._act_rmsf_shade.toggled.connect(_toggle_rmsf)
 
         display_btn.setMenu(menu)
         toolbar_row.addWidget(display_btn)
