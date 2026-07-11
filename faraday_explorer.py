@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QTextEdit,
 )
 from PyQt5.QtWidgets import QSplashScreen
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QLocale, QObject, QEvent
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSettings, QEventLoop, QLocale
 from PyQt5.QtGui import QFont, QPixmap, QImage
 
 # Two-phase splash: branding video → app-name video.
@@ -2856,22 +2856,14 @@ class MainWindow(QMainWindow):
         theme_dict = Theme.get_theme(self.theme)
         QApplication.instance().setStyleSheet(theme_dict["stylesheet"])
 
-        # ── Register for file open events (for .mod file double-clicks on existing app) ──
-        app = QApplication.instance()
-        for obj in app.children():
-            if isinstance(obj, AppEventFilter):
-                obj.file_open_requested.connect(self._handle_external_file_open)
-                break
-
         # ── Update once to initialise plots ──────────────────────────────────
         self._update()
 
         # ── Handle .mod file opening from file association ────────────────────
         if mod_file_to_open:
-            print(f"[INFO] .mod file provided: {mod_file_to_open}")
-            self.mod_file_to_open = mod_file_to_open
-            # Schedule loading after UI is fully initialized and visible
-            QTimer.singleShot(100, self._load_mod_file_on_startup)
+            print(f"[INFO] .mod file provided: {mod_file_to_open} (workspace preserved)")
+            # In the future, this can load workspace state from .mod file
+            # For now, just log that it was received
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
@@ -3460,79 +3452,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Success", f"Workspace '{name}' deleted.")
             else:
                 QMessageBox.critical(self, "Error", "Failed to delete workspace.")
-
-    def _load_mod_file_on_startup(self):
-        """Load a .mod file that was passed via command-line (file association).
-
-        Called automatically after the UI is initialized.
-        Does not show a success message since the file was auto-loaded.
-        """
-        if not hasattr(self, 'mod_file_to_open') or not self.mod_file_to_open:
-            return
-
-        path = self.mod_file_to_open
-        self.mod_file_to_open = None
-
-        if not os.path.exists(path):
-            print(f"[ERROR] .mod file not found: {path}")
-            return
-
-        model, params, error = load_model_file(path)
-        if error:
-            print(f"[ERROR] Failed to load .mod file: {error}")
-            return
-
-        # Set the model and parameters
-        print(f"[INFO] Loading model '{model}' from {os.path.basename(path)}")
-        self.model_combo.setCurrentText(model)
-        self._on_model(model)  # Reconfigure param widgets
-
-        # Load parameter values
-        for i, val in enumerate(params):
-            if i < len(self._param_widgets):
-                self._param_widgets[i].spin.setValue(float(val))
-
-        print(f"[INFO] Model parameters loaded successfully.")
-
-    def _handle_external_file_open(self, file_path):
-        """Handle a file open request from the OS (e.g., double-clicking a .mod file).
-
-        This is called when the app is already running and a .mod file is opened.
-        Brings the window to focus and loads the model.
-        """
-        if not file_path.endswith('.mod'):
-            return  # Only handle .mod files
-
-        print(f"[INFO] External file open: {file_path}")
-
-        # Bring window to front
-        self.raise_()
-        self.activateWindow()
-
-        # Load the model file
-        if not os.path.exists(file_path):
-            QMessageBox.warning(self, "File Not Found", f"File not found: {file_path}")
-            return
-
-        model, params, error = load_model_file(file_path)
-        if error:
-            QMessageBox.critical(self, "Error Loading Model", error)
-            return
-
-        # Set the model and parameters
-        print(f"[INFO] Loading model '{model}' from {os.path.basename(file_path)}")
-        self.model_combo.setCurrentText(model)
-        self._on_model(model)  # Reconfigure param widgets
-
-        # Load parameter values
-        for i, val in enumerate(params):
-            if i < len(self._param_widgets):
-                self._param_widgets[i].spin.setValue(float(val))
-
-        QMessageBox.information(
-            self, "Success",
-            f"Model '{model}' loaded from {os.path.basename(file_path)}"
-        )
 
     def _load_model_dialog(self):
         """Open file dialog to load a .mod file."""
@@ -4664,28 +4583,11 @@ class MainWindow(QMainWindow):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-class AppEventFilter(QObject):
-    """Event filter to handle file open requests from the OS (e.g., double-clicking .mod files on macOS)."""
-    file_open_requested = pyqtSignal(str)  # Emits the file path
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.FileOpen:
-            file_path = event.file()
-            if file_path:
-                self.file_open_requested.emit(file_path)
-                return True
-        return super().eventFilter(obj, event)
-
-
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Faraday Explorer")
     app.setOrganizationName("AmaniAstro")
     app.setStyle("Fusion")
-
-    # Install event filter to handle file open requests from the OS
-    app_filter = AppEventFilter()
-    app.installEventFilter(app_filter)
 
     # ── Parse optional CLI flags (consumed before the positional args) ────────
     HELP = (
@@ -4747,40 +4649,13 @@ def main():
 
     # Check if first positional arg is a .mod file (for file association)
     if len(sys.argv) >= 2 and sys.argv[1].endswith('.mod'):
-        # .mod file provided via command line (file association)
+        # .mod file provided via command line (file association) — open GUI, remember .mod file
         mod_file_to_open = sys.argv[1]
         print(f"File association: .mod file requested: {mod_file_to_open}")
-        # Try to load last used FDF and frequency files from settings
-        from PyQt5.QtCore import QSettings
-        cfg = QSettings("FaradayExplorer", "FaradayExplorer")
-        cached_fdf = cfg.value("path_fdf", "")
-        cached_freq = cfg.value("path_freq", "")
-
-        # If both cached files exist and are valid, use them (skip LaunchDialog)
-        if (cached_fdf and os.path.exists(cached_fdf) and
-            cached_freq and os.path.exists(cached_freq)):
-            print(f"Using cached FDF: {cached_fdf}")
-            print(f"Using cached frequency file: {cached_freq}")
-            fdf_path, freq_file = cached_fdf, cached_freq
-            i_path = q_path = u_path = None
-            map_step = max(1, round(100 / cli_ds_pct))
-            try:
-                freqs = np.loadtxt(freq_file)
-                paths = dict(fdf=fdf_path, i=None, q=None, u=None)
-                _, beam_info = validate_inputs(paths)
-                print(f"CLI/MOD mode — {len(freqs)} frequencies from {freq_file}, "
-                      f"downsample = {cli_ds_pct}% (map_step={map_step})")
-                len_sys_argv = 0  # Skip the LaunchDialog branch below
-            except Exception as e:
-                print(f"[WARN] Failed to load cached files: {e}")
-                # Fall through to LaunchDialog
-                sys.argv = [sys.argv[0]]
-                len_sys_argv = len(sys.argv)
-        else:
-            # No cached files; fall through to LaunchDialog
-            print("[INFO] No cached FDF/frequency files; will show launch dialog")
-            sys.argv = [sys.argv[0]]
-            len_sys_argv = len(sys.argv)
+        # Fall through to GUI mode (LaunchDialog)
+        cli_args = sys.argv[1:]
+        sys.argv = [sys.argv[0]]  # Clear arguments so we fall through to GUI
+        len_sys_argv = len(sys.argv)
     else:
         len_sys_argv = len(sys.argv)
 
@@ -4796,8 +4671,7 @@ def main():
         _, beam_info = validate_inputs(paths)
         print(f"CLI mode — {len(freqs)} frequencies from {freq_file}, "
               f"downsample = {cli_ds_pct}% (map_step={map_step})")
-    elif not mod_file_to_open or len_sys_argv < 3:
-        # Only show LaunchDialog if no .mod file was used OR if cached files weren't valid
+    else:
         while True:
             dlg = LaunchDialog()
             if dlg.exec_() != QDialog.Accepted:
