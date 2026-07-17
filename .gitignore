@@ -42,5 +42,8 @@ build/
 .DS_Store
 Thumbs.db
 
+# macOS-only local helpers (Finder file-association wrappers, hardcoded /Users paths)
+open-mod-file.sh
+
 # Qt settings cache
 *.ini
