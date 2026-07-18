@@ -44,3 +44,6 @@ Thumbs.db
 
 # Qt settings cache
 *.ini
+
+# Local dev docs (not for the public repo)
+TESTING_GUIDE.md
