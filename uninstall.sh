@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Faraday Explorer — uninstall helper.
+# Faraday Explorer - uninstall helper.
 # Run from the repo:  bash uninstall.sh [conda_env_name]
 #
 # What it does (with confirmation at each step):
@@ -43,7 +43,7 @@ case "$ans" in
     *) echo "Aborted."; exit 0 ;;
 esac
 
-# ── 1. Remove launcher ───────────────────────────────────────────────────────
+# -- 1. Remove launcher -------------------------------------------------------
 echo "[1/3] Removing launcher..."
 if [ "$OS" = "Darwin" ]; then
     rm -rf "$APP_DIR"
@@ -54,7 +54,7 @@ else
     gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 fi
 
-# ── 2. Remove Qt settings cache ──────────────────────────────────────────────
+# -- 2. Remove Qt settings cache ----------------------------------------------
 echo "[2/3] Removing settings cache..."
 if [ "$OS" = "Darwin" ]; then
     rm -f "$SETTINGS_PATH"
@@ -62,7 +62,7 @@ else
     rm -rf "$HOME/.config/AmaniAstro"
 fi
 
-# ── 3. Remove conda env ──────────────────────────────────────────────────────
+# -- 3. Remove conda env ------------------------------------------------------
 echo "[3/3] Removing conda environment '$ENV_NAME'..."
 find_conda() {
     for p in \
@@ -79,10 +79,10 @@ if [ -n "$CONDA_BASE" ]; then
     if conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
         conda env remove -n "$ENV_NAME" -y
     else
-        echo "  (env '$ENV_NAME' not found — nothing to remove)"
+        echo "  (env '$ENV_NAME' not found - nothing to remove)"
     fi
 else
-    echo "  (conda not found — skipping env removal; do it manually if needed)"
+    echo "  (conda not found - skipping env removal; do it manually if needed)"
 fi
 
 echo ""

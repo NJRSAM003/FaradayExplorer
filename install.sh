@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Faraday Explorer — one-time install helper.
+# Faraday Explorer - one-time install helper.
 # Run once after cloning:  bash install.sh [conda_env_name]
 #
 # What it does:
@@ -20,7 +20,7 @@ echo "Conda environment : $ENV_NAME"
 echo "Platform          : $OS"
 echo "==========================================================="
 
-# ── 1. Create / update conda env ─────────────────────────────────────────────
+# -- 1. Create / update conda env ---------------------------------------------
 find_conda() {
     for p in \
         "$HOME/anaconda3" "$HOME/miniconda3" "$HOME/miniforge3" \
@@ -39,16 +39,16 @@ fi
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 
 if conda env list | grep -qE "^${ENV_NAME}[[:space:]]"; then
-    echo "[1/3] Conda env '$ENV_NAME' already exists — updating..."
+    echo "[1/3] Conda env '$ENV_NAME' already exists - updating..."
     conda env update -n "$ENV_NAME" -f "$SCRIPT_DIR/environment.yml" --prune
 else
     echo "[1/3] Creating conda env '$ENV_NAME'..."
     conda env create -n "$ENV_NAME" -f "$SCRIPT_DIR/environment.yml"
 fi
 
-# ── 2. Platform-specific launcher registration ────────────────────────────────
+# -- 2. Platform-specific launcher registration --------------------------------
 if [ "$OS" = "Darwin" ]; then
-    # macOS: build a .app bundle — prefer /Applications (visible in Finder),
+    # macOS: build a .app bundle - prefer /Applications (visible in Finder),
     # fall back to ~/Applications if the user lacks write permission.
     echo "[2/3] Creating macOS app bundle..."
 
@@ -116,7 +116,7 @@ LAUNCHER
     echo "Done!  FaradayExplorer.app installed to: $APP_DIR"
     echo "  Find it in Finder → Applications and double-click to launch."
     echo "  Drag it to your Dock for one-click access."
-    echo "  Note: the .app references this directory — don't move the repo"
+    echo "  Note: the .app references this directory - don't move the repo"
     echo "  without re-running install.sh."
 
 else
@@ -143,8 +143,8 @@ else
     echo ""
     echo "Done!  Launch Faraday Explorer with:"
     echo "  ${SCRIPT_DIR}/launch_faraday_explorer.sh"
-    echo "  — or find 'Faraday Explorer' in your application menu."
+    echo "  - or find 'Faraday Explorer' in your application menu."
 fi
 
-# ── 3. Ensure launcher is executable on both platforms ───────────────────────
+# -- 3. Ensure launcher is executable on both platforms -----------------------
 chmod +x "$SCRIPT_DIR/launch_faraday_explorer.sh"

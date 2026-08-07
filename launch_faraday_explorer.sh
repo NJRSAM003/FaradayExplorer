@@ -20,7 +20,7 @@ elif [ -n "$1" ] && [ ! -e "$1" ] && [[ "$1" != *.fits ]] && [[ "$1" != *.FITS ]
     shift
 fi
 
-# ── Locate conda ──────────────────────────────────────────────────────────────
+# -- Locate conda --------------------------------------------------------------
 find_conda() {
     for p in \
         "$HOME/anaconda3" \
@@ -42,7 +42,7 @@ if [ -z "$CONDA_BASE" ]; then
     exit 1
 fi
 
-# Use the env's Python directly — works in non-interactive shells (desktop launchers)
+# Use the env's Python directly - works in non-interactive shells (desktop launchers)
 ENV_PYTHON="$CONDA_BASE/envs/$ENV_NAME/bin/python3"
 
 if [ ! -x "$ENV_PYTHON" ]; then

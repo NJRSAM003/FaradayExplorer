@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
-# ── Import physics functions from the viewer ──────────────────────────────────
+# -- Import physics functions from the viewer ----------------------------------
 sys.path.insert(0, os.path.dirname(__file__))
 src = open(os.path.join(os.path.dirname(__file__), "qu_model_viewer.py")).read()
 src = src.replace("if __name__ == '__main__':", "if False:")
@@ -36,7 +36,7 @@ PHI_MIN, PHI_MAX, N_PHI = -600.0, 600.0, 2401
 phi  = np.linspace(PHI_MIN, PHI_MAX, N_PHI)
 dphi = (PHI_MAX - PHI_MIN) / (N_PHI - 1)
 
-# ── Test cases ────────────────────────────────────────────────────────────────
+# -- Test cases ----------------------------------------------------------------
 # Each entry: (model_id, parameter_values, expected_peak_phis, description)
 TEST_CASES = [
     ("m1",
@@ -107,15 +107,15 @@ def run_tests(freqs):
     minsep = max(1, int(fwhm / (2 * dphi)))   # minimum peak separation in samples
 
     print(f"\n  Frequencies : {len(freqs)} channels  "
-          f"({freqs.min()/1e9:.3f} – {freqs.max()/1e9:.3f} GHz)")
+          f"({freqs.min()/1e9:.3f} - {freqs.max()/1e9:.3f} GHz)")
     print(f"  RMSF FWHM   : {fwhm:.1f} rad/m²   (match tolerance ± {tol:.1f} rad/m²)\n")
     print(f"  {'Model':<6} {'Expected peaks':>28}  {'Detected peaks':>28}  "
           f"{'Max Δφ':>9}  {'Result'}")
-    print("  " + "─" * 88)
+    print("  " + "-" * 88)
 
     results   = []
     fig, axes = plt.subplots(2, 5, figsize=(18, 7), sharey=False)
-    fig.suptitle("RM-Tools Model Diagnostic  —  FDF peak-location test\n"
+    fig.suptitle("RM-Tools Model Diagnostic  -  FDF peak-location test\n"
                  f"({len(freqs)} channels, RMSF FWHM ≈ {fwhm:.1f} rad/m²,  "
                  f"tolerance ± {tol:.1f} rad/m²)",
                  fontsize=11, fontweight="bold")
@@ -149,7 +149,7 @@ def run_tests(freqs):
         det_str = str([f"{d:+.1f}" for d in detected[:len(expected)+2]])
         print(f"  {model:<6} {exp_str:>28}  {det_str:>28}  {max_delta:>8.1f}  {tag}")
 
-        # ── Subplot ───────────────────────────────────────────────────────────
+        # -- Subplot -----------------------------------------------------------
         color = "#2ecc71" if passed else "#e74c3c"
         ax.plot(phi, amp / amax, color="steelblue", lw=1.3)
         for e in expected:
@@ -175,7 +175,7 @@ def run_tests(freqs):
                fontsize=8, framealpha=0.8)
 
     n_pass = sum(results)
-    print("  " + "─" * 88)
+    print("  " + "-" * 88)
     print(f"\n  {n_pass}/{len(results)} models PASSED\n")
 
     plt.tight_layout(rect=[0, 0.04, 1, 1])
